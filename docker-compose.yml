@@ -1,0 +1,78 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: k8s-log-analytics-db
+    environment:
+      POSTGRES_DB: loganalytics
+      POSTGRES_USER: loguser
+      POSTGRES_PASSWORD: logpass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loguser -d loganalytics"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - k8s-log-analytics-network
+
+  # Redis for caching and Celery
+  redis:
+    image: redis:7-alpine
+    container_name: k8s-log-analytics-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - k8s-log-analytics-network
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: k8s-log-analytics-backend
+    environment:
+      DATABASE_URL: postgresql://loguser:logpass@postgres:5432/loganalytics
+      REDIS_URL: redis://redis:6379/0
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      KUBECONFIG: /kubeconfig/config
+    volumes:
+      # Mount kubeconfig for Kubernetes access (optional)
+      - ~/.kube/config:/kubeconfig/config:ro
+      # Mount Docker socket for Docker Desktop Kubernetes access (optional)
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - k8s-log-analytics-network
+    restart: unless-stopped
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: k8s-log-analytics-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    networks:
+      - k8s-log-analytics-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  k8s-log-analytics-network:
+    driver: bridge
