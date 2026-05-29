@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BarChart3, PieChart, TrendingUp, Loader2, AlertCircle, Filter, Brain, Trash2, Server, Clock, FileText, History, ChevronDown, ChevronUp } from 'lucide-react';
+import { BarChart3, PieChart, TrendingUp, Loader2, AlertCircle, Filter, Brain, Trash2, Server, FileText, History, ChevronDown, ChevronUp } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { logAPI, parseAnalysis } from '../services/api';
 import { LogEntry, K8sResource, LogSession } from '../types';
@@ -34,7 +34,8 @@ const DashboardPage: React.FC = () => {
   const [sessions, setSessions] = useState<LogSession[]>([]);
   const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
   const [confirmDeleteSessionId, setConfirmDeleteSessionId] = useState<number | null>(null);
-  const [expandedSessionId, setExpandedSessionId] = useState<number | null>(null);
+  const [expandedGroupName, setExpandedGroupName] = useState<string | null>(null);
+  const [confirmDeleteGroupName, setConfirmDeleteGroupName] = useState<string | null>(null);
 
   // Show popup if redirected from Cluster page with analysis in state
   useEffect(() => {
@@ -150,6 +151,16 @@ const DashboardPage: React.FC = () => {
     }
   };
 
+  const handleDeleteGroup = async (name: string) => {
+    const group = sessions.filter(s => s.name === name);
+    for (const s of group) {
+      try { await logAPI.deleteSession(s.id); } catch { /* best effort */ }
+    }
+    setSessions(prev => prev.filter(s => s.name !== name));
+    setConfirmDeleteGroupName(null);
+    if (expandedGroupName === name) setExpandedGroupName(null);
+  };
+
   // Prepare data for charts
   const LEVEL_COLORS: Record<string, string> = {
     DEBUG:    '#8B5CF6',
@@ -242,9 +253,16 @@ const DashboardPage: React.FC = () => {
     );
   }
 
-  // Count how many times each source name has been analysed
-  const analysisCountByName: Record<string, number> = {};
-  sessions.forEach(s => { analysisCountByName[s.name] = (analysisCountByName[s.name] || 0) + 1; });
+  // Group sessions by name (newest-first within each group), groups sorted by most recent
+  const groupedSessions: Record<string, LogSession[]> = {};
+  sessions.forEach(s => {
+    if (!groupedSessions[s.name]) groupedSessions[s.name] = [];
+    groupedSessions[s.name].push(s);
+  });
+  const sortedGroupNames = Object.keys(groupedSessions).sort((a, b) =>
+    new Date(groupedSessions[b][0].created_at).getTime() - new Date(groupedSessions[a][0].created_at).getTime()
+  );
+  const uniqueCount = sortedGroupNames.length;
 
   return (
     <div className="flex gap-5 items-start">
@@ -256,15 +274,15 @@ const DashboardPage: React.FC = () => {
             <History className="h-4 w-4 text-purple-400" />
             <span className="text-sm font-semibold text-gray-200 uppercase tracking-wide">Sessions</span>
           </div>
-          {sessions.length > 0 && (
+          {uniqueCount > 0 && (
             <span className="bg-purple-600/30 text-purple-300 text-xs font-semibold px-2 py-0.5 rounded-full border border-purple-700/50">
-              {sessions.length}
+              {uniqueCount}
             </span>
           )}
         </div>
 
         <div className="overflow-y-auto" style={{ maxHeight: 'calc(100vh - 10rem)' }}>
-          {sessions.length === 0 ? (
+          {uniqueCount === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
               <History className="h-10 w-10 text-gray-700 mb-3" />
               <p className="text-gray-500 text-sm">No sessions yet</p>
@@ -272,104 +290,112 @@ const DashboardPage: React.FC = () => {
             </div>
           ) : (
             <div className="divide-y divide-gray-700/50">
-              {sessions.map((session) => {
-                const isExpanded = expandedSessionId === session.id;
-                const count = analysisCountByName[session.name] || 1;
+              {sortedGroupNames.map((name) => {
+                const group = groupedSessions[name];
+                const latest = group[0];
+                const count = group.length;
+                const isExpanded = expandedGroupName === name;
+
                 return (
-                  <div key={session.id} className={`transition-colors ${isExpanded ? 'bg-gray-800/80' : 'hover:bg-gray-800/40'}`}>
-                    <div className="px-4 py-3 flex items-start gap-3">
+                  <div key={name} className={`transition-colors ${isExpanded ? 'bg-gray-800/60' : 'hover:bg-gray-800/30'}`}>
+                    {/* Group header */}
+                    <div className="px-3 py-3 flex items-start gap-2">
                       <div className="mt-0.5 shrink-0">
-                        {session.source_type === 'pod'
+                        {latest.source_type === 'pod'
                           ? <Server className="h-4 w-4 text-blue-400" />
                           : <FileText className="h-4 w-4 text-green-400" />}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-100 truncate leading-tight" title={session.name}>
-                          {session.name}
-                        </p>
-                        <div className="flex items-center gap-2 mt-1 flex-wrap">
-                          {session.severity && (
-                            <span className={`text-xs px-1.5 py-0.5 rounded border font-medium ${getSeverityStyle(session.severity)}`}>
-                              {session.severity}
+                        <p className="text-sm font-medium text-gray-100 truncate leading-tight" title={name}>{name}</p>
+                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                          {latest.severity && (
+                            <span className={`text-xs px-1.5 py-0.5 rounded border font-medium ${getSeverityStyle(latest.severity)}`}>
+                              {latest.severity}
                             </span>
                           )}
-                          <span className="text-xs text-gray-500">{session.entry_count} entries</span>
-                          {count > 1 && (
-                            <span className="text-xs text-purple-400 font-medium">{count}&times; analysed</span>
-                          )}
+                          <span className="text-xs text-gray-500">{latest.entry_count} entries</span>
                         </div>
-                        <div className="flex items-center gap-1 mt-1 text-xs text-gray-600">
-                          <Clock className="h-3 w-3" />
-                          {new Date(session.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        <div className="flex items-center gap-1 mt-1">
+                          <span className="text-xs text-purple-400 font-semibold">{count}&times; analysed</span>
                         </div>
                       </div>
-                      <div className="flex flex-col gap-1 shrink-0">
+                      <div className="flex flex-col gap-1 shrink-0 items-end">
+                        {/* Expand toggle */}
                         <button
-                          onClick={() => setExpandedSessionId(isExpanded ? null : session.id)}
-                          disabled={!session.analysis}
-                          title={session.analysis ? 'Toggle details' : 'No analysis stored'}
-                          className={`p-1 rounded transition-colors ${
-                            session.analysis ? 'text-gray-400 hover:text-purple-300 hover:bg-purple-900/30' : 'text-gray-700 cursor-not-allowed'
-                          }`}
+                          onClick={() => setExpandedGroupName(isExpanded ? null : name)}
+                          className="p-1 text-gray-400 hover:text-purple-300 hover:bg-purple-900/30 rounded transition-colors"
+                          title="Show executions"
                         >
                           {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                         </button>
-                        {confirmDeleteSessionId === session.id ? (
-                          <div className="flex gap-0.5">
-                            <button onClick={() => handleDeleteSession(session.id)} disabled={deletingSessionId === session.id}
-                              className="text-xs bg-red-600 hover:bg-red-700 text-white px-1.5 py-0.5 rounded">
-                              {deletingSessionId === session.id ? '…' : 'Y'}
-                            </button>
-                            <button onClick={() => setConfirmDeleteSessionId(null)}
-                              className="text-xs bg-gray-600 hover:bg-gray-500 text-white px-1.5 py-0.5 rounded">N</button>
+                        {/* Group delete */}
+                        {confirmDeleteGroupName === name ? (
+                          <div className="flex gap-0.5 mt-0.5">
+                            <button onClick={() => handleDeleteGroup(name)}
+                              className="text-xs bg-red-600 hover:bg-red-700 text-white px-1.5 py-0.5 rounded">All</button>
+                            <button onClick={() => setConfirmDeleteGroupName(null)}
+                              className="text-xs bg-gray-600 hover:bg-gray-500 text-white px-1.5 py-0.5 rounded">✕</button>
                           </div>
                         ) : (
-                          <button onClick={() => setConfirmDeleteSessionId(session.id)}
-                            className="p-1 text-gray-700 hover:text-red-400 rounded transition-colors">
+                          <button onClick={() => setConfirmDeleteGroupName(name)}
+                            className="p-1 text-gray-700 hover:text-red-400 rounded transition-colors" title="Delete all runs">
                             <Trash2 className="h-3 w-3" />
                           </button>
                         )}
                       </div>
                     </div>
 
-                    {/* Inline expanded analysis */}
-                    {isExpanded && session.analysis && (() => {
-                      const a = parseAnalysis(session.analysis);
-                      return (
-                        <div className="px-4 pb-3 space-y-2 border-t border-gray-700/60 bg-gray-900/40">
-                          <div className="mt-2">
-                            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Health</p>
-                            <p className="text-xs text-gray-300 bg-gray-900 rounded p-2 leading-relaxed">{a.health_assessment || '—'}</p>
+                    {/* Executions list */}
+                    {isExpanded && (
+                      <div className="border-t border-gray-700/60 bg-gray-900/50 divide-y divide-gray-800/60">
+                        {group.map((session, idx) => (
+                          <div key={session.id} className="px-3 py-2 flex items-center gap-2 hover:bg-gray-800/40 transition-colors">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-xs font-semibold text-gray-400">#{count - idx}</span>
+                                <span className="text-xs text-gray-500">
+                                  {new Date(session.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              </div>
+                              {session.severity && (
+                                <span className={`text-xs px-1 py-0.5 rounded border font-medium mt-0.5 inline-block ${getSeverityStyle(session.severity)}`}>
+                                  {session.severity}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                onClick={() => handleRestoreSession(session)}
+                                disabled={!session.analysis}
+                                title={session.analysis ? 'View analysis' : 'No analysis stored'}
+                                className={`p-1 rounded transition-colors text-xs ${
+                                  session.analysis
+                                    ? 'text-purple-400 hover:text-purple-300 hover:bg-purple-900/30'
+                                    : 'text-gray-700 cursor-not-allowed'
+                                }`}
+                              >
+                                <Brain className="h-3.5 w-3.5" />
+                              </button>
+                              {confirmDeleteSessionId === session.id ? (
+                                <div className="flex gap-0.5">
+                                  <button onClick={() => handleDeleteSession(session.id)} disabled={deletingSessionId === session.id}
+                                    className="text-xs bg-red-600 hover:bg-red-700 text-white px-1 py-0.5 rounded">
+                                    {deletingSessionId === session.id ? '…' : 'Y'}
+                                  </button>
+                                  <button onClick={() => setConfirmDeleteSessionId(null)}
+                                    className="text-xs bg-gray-600 text-white px-1 py-0.5 rounded">N</button>
+                                </div>
+                              ) : (
+                                <button onClick={() => setConfirmDeleteSessionId(session.id)}
+                                  className="p-1 text-gray-800 hover:text-red-400 rounded transition-colors">
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                              )}
+                            </div>
                           </div>
-                          {a.anomalies?.length > 0 && (
-                            <div>
-                              <p className="text-xs font-semibold text-red-400 uppercase tracking-wide mb-1">Anomalies ({a.anomalies.length})</p>
-                              <ul className="space-y-0.5">
-                                {a.anomalies.slice(0, 3).map((x: string, i: number) => (
-                                  <li key={i} className="text-xs text-gray-300 flex gap-1"><span className="text-red-500 shrink-0">•</span>{x}</li>
-                                ))}
-                                {a.anomalies.length > 3 && <li className="text-xs text-gray-600">+{a.anomalies.length - 3} more…</li>}
-                              </ul>
-                            </div>
-                          )}
-                          {a.resolutions?.length > 0 && (
-                            <div>
-                              <p className="text-xs font-semibold text-green-400 uppercase tracking-wide mb-1">Resolutions</p>
-                              <ul className="space-y-0.5">
-                                {a.resolutions.slice(0, 2).map((x: string, i: number) => (
-                                  <li key={i} className="text-xs text-gray-300 flex gap-1"><span className="text-green-500 shrink-0">•</span>{x}</li>
-                                ))}
-                                {a.resolutions.length > 2 && <li className="text-xs text-gray-600">+{a.resolutions.length - 2} more…</li>}
-                              </ul>
-                            </div>
-                          )}
-                          <button onClick={() => handleRestoreSession(session)}
-                            className="w-full mt-1 bg-purple-700 hover:bg-purple-600 text-white text-xs font-medium py-1.5 rounded-md flex items-center justify-center gap-1.5 transition-colors">
-                            <Brain className="h-3 w-3" /> Full Analysis
-                          </button>
-                        </div>
-                      );
-                    })()}
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
