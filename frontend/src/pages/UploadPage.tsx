@@ -1,50 +1,84 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
-  Upload, AlertCircle, CheckCircle, Loader2,
+  Upload, AlertCircle, CheckCircle, Loader2, FileText,
   Brain, Activity, Wrench, Zap, GitBranch, ShieldAlert, RotateCcw,
+  BarChart3, ArrowRight, UploadCloud,
 } from 'lucide-react';
 import { logAPI, parseAnalysis } from '../services/api';
 import { LogUploadResponse, AnalysisResult } from '../types';
+type Phase = 'select' | 'uploading' | 'uploaded' | 'analyzing' | 'analyzed';
 
 const UploadPage: React.FC = () => {
+  const navigate = useNavigate();
+  const [phase, setPhase] = useState<Phase>('select');
   const [file, setFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const [uploadResult, setUploadResult] = useState<LogUploadResponse | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [analyzeStatus, setAnalyzeStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = event.target.files?.[0];
-    if (selectedFile) {
-      setFile(selectedFile);
-      setError(null);
-      setUploadResult(null);
-      setAnalysis(null);
-    }
+  const handleFileSelect = (f: File) => {
+    setFile(f);
+    setError(null);
   };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) handleFileSelect(f);
+  };
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f) handleFileSelect(f);
+  }, []);
+
+  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setDragOver(true); };
 
   const handleReset = () => {
     setFile(null);
     setUploadResult(null);
     setAnalysis(null);
     setError(null);
+    setAnalyzeStatus('');
+    setPhase('select');
   };
 
   const handleUpload = async () => {
     if (!file) return;
-    setUploading(true);
+    setPhase('uploading');
     setError(null);
     try {
       const result = await logAPI.uploadFile(file);
       setUploadResult(result);
-      if (result.analysis_id) {
-        const analysisData = await logAPI.getAnalysis(result.analysis_id);
-        setAnalysis(parseAnalysis(analysisData));
-      }
+      setPhase('uploaded');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');
-    } finally {
-      setUploading(false);
+      setPhase('select');
+    }
+  };
+
+  const handleAnalyze = async () => {
+    if (!uploadResult) return;
+    setPhase('analyzing');
+    setError(null);
+    try {
+      setAnalyzeStatus('Preparing log entries...');
+      await new Promise(r => setTimeout(r, 400));
+      setAnalyzeStatus('Sending to AI engine...');
+      await new Promise(r => setTimeout(r, 300));
+      setAnalyzeStatus('Running senior DevOps analysis...');
+      const raw = await logAPI.analyzeLogs(uploadResult.file_id, undefined, 'general');
+      setAnalyzeStatus('Processing results...');
+      await new Promise(r => setTimeout(r, 300));
+      setAnalysis(parseAnalysis(raw));
+      setPhase('analyzed');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Analysis failed');
+      setPhase('uploaded');
     }
   };
 
@@ -75,47 +109,14 @@ const UploadPage: React.FC = () => {
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
-      <div>
-        <h1 className="text-3xl font-bold text-white mb-2">Upload Log File</h1>
-        <p className="text-gray-400">Upload a log file for AI-powered anomaly detection and analysis</p>
+
+      {/* Page Header */}
+      <div className="flex flex-col gap-1.5 pb-5 border-b border-gray-700/50">
+        <h1 className="text-3xl font-extrabold text-white tracking-tight">Upload Log File</h1>
+        <p className="text-gray-400 text-sm">Upload a log file for AI-powered anomaly detection and DevOps analysis</p>
       </div>
 
-      {/* Upload card — hide once analysis is ready */}
-      {!analysis && (
-        <>
-          <div className="bg-gray-800 rounded-xl p-8 border-2 border-dashed border-gray-600 hover:border-blue-500 transition-colors">
-            <div className="flex flex-col items-center text-center">
-              <div className="p-4 bg-gray-700/50 rounded-full mb-4">
-                <Upload className="h-10 w-10 text-gray-400" />
-              </div>
-              <input type="file" onChange={handleFileSelect} accept=".log,.txt" className="hidden" id="file-upload" />
-              <label htmlFor="file-upload" className="cursor-pointer text-blue-400 hover:text-blue-300 font-medium text-lg transition-colors">
-                {file ? file.name : 'Click to select a log file'}
-              </label>
-              {file
-                ? <p className="mt-2 text-sm text-gray-500">{(file.size / 1024).toFixed(2)} KB · .{file.name.split('.').pop()}</p>
-                : <p className="mt-2 text-sm text-gray-600">Supports .log and .txt files</p>
-              }
-            </div>
-          </div>
-
-          {file && (
-            <button
-              onClick={handleUpload}
-              disabled={uploading}
-              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white font-semibold py-3 px-4 rounded-xl transition flex items-center justify-center gap-2"
-            >
-              {uploading ? (
-                <><Loader2 className="animate-spin h-5 w-5" /> Uploading and Analyzing…</>
-              ) : (
-                <><Brain className="h-5 w-5" /> Upload &amp; Analyze</>
-              )}
-            </button>
-          )}
-        </>
-      )}
-
-      {/* Error */}
+      {/* Error banner */}
       {error && (
         <div className="bg-red-900/50 border border-red-700 rounded-xl p-4 flex items-start gap-3">
           <AlertCircle className="h-5 w-5 text-red-400 shrink-0 mt-0.5" />
@@ -123,20 +124,156 @@ const UploadPage: React.FC = () => {
         </div>
       )}
 
-      {/* ── FULL ANALYSIS RESULTS ── */}
-      {analysis && uploadResult && sc && (
+      {/* ── PHASE: SELECT ── */}
+      {(phase === 'select' || phase === 'uploading') && (
+        <div className="space-y-5">
+          {/* Drop zone */}
+          <div
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+            onDragLeave={() => setDragOver(false)}
+            onDragEnter={handleDragOver}
+            className={`relative rounded-xl border-2 border-dashed transition-all p-10 flex flex-col items-center text-center gap-4
+              ${dragOver
+                ? 'border-blue-500 bg-blue-900/10 scale-[1.01]'
+                : file
+                  ? 'border-green-600 bg-green-900/10'
+                  : 'border-gray-600 bg-gray-800/50 hover:border-blue-500 hover:bg-blue-900/5'
+              }`}
+          >
+            <div className={`p-4 rounded-full ${dragOver ? 'bg-blue-500/20' : file ? 'bg-green-500/15' : 'bg-gray-700/60'}`}>
+              {file
+                ? <CheckCircle className="h-10 w-10 text-green-400" />
+                : <UploadCloud className={`h-10 w-10 ${dragOver ? 'text-blue-400' : 'text-gray-500'}`} />
+              }
+            </div>
+
+            {file ? (
+              <div className="space-y-1">
+                <p className="text-white font-semibold text-lg">{file.name}</p>
+                <p className="text-gray-400 text-sm">
+                  {(file.size / 1024).toFixed(1)} KB · .{file.name.split('.').pop()?.toUpperCase()}
+                </p>
+                <p className="text-green-400 text-xs font-medium">File ready for upload</p>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                <p className="text-gray-300 font-medium">Drag &amp; drop your log file here</p>
+                <p className="text-gray-500 text-sm">or click to browse · Supports .log, .txt</p>
+              </div>
+            )}
+
+            <input
+              type="file"
+              onChange={handleInputChange}
+              accept=".log,.txt"
+              className="absolute inset-0 opacity-0 cursor-pointer"
+              id="file-upload"
+            />
+          </div>
+
+          {/* Upload button */}
+          {file && (
+            <button
+              onClick={handleUpload}
+              disabled={phase === 'uploading'}
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white font-semibold py-3.5 px-4 rounded-xl transition-colors flex items-center justify-center gap-2.5 text-base"
+            >
+              {phase === 'uploading' ? (
+                <><Loader2 className="animate-spin h-5 w-5" /> Uploading file…</>
+              ) : (
+                <><Upload className="h-5 w-5" /> Upload File</>
+              )}
+            </button>
+          )}
+
+          {!file && (
+            <label
+              htmlFor="file-upload"
+              className="w-full flex items-center justify-center gap-2 py-3 border border-gray-600 hover:border-blue-500 text-gray-400 hover:text-blue-300 rounded-xl transition-colors text-sm font-medium cursor-pointer"
+            >
+              <FileText className="h-4 w-4" /> Browse and select a file
+            </label>
+          )}
+        </div>
+      )}
+
+      {/* ── PHASE: UPLOADED (status card + Analyze button) ── */}
+      {(phase === 'uploaded' || phase === 'analyzing') && uploadResult && (
         <div className="space-y-5">
 
-          {/* Header banner */}
+          {/* Upload success card */}
+          <div className="bg-green-900/20 border border-green-700/60 rounded-xl p-5 flex items-center gap-5">
+            <div className="p-3 bg-green-500/15 rounded-full shrink-0">
+              <CheckCircle className="h-8 w-8 text-green-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-green-500 font-semibold uppercase tracking-wide mb-0.5">Upload Successful</p>
+              <p className="text-white font-semibold text-lg truncate">{file?.name}</p>
+              <div className="flex flex-wrap gap-4 mt-1.5">
+                <span className="flex items-center gap-1.5 text-sm text-gray-400">
+                  <BarChart3 className="h-3.5 w-3.5 text-blue-400" />
+                  <span className="text-white font-semibold">{uploadResult.entries_count}</span> log entries parsed
+                </span>
+                <span className="flex items-center gap-1.5 text-sm text-gray-400">
+                  <FileText className="h-3.5 w-3.5 text-gray-500" />
+                  Resource ID: <span className="text-gray-300 font-medium ml-1">#{uploadResult.file_id}</span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Analyze button */}
+          <button
+            onClick={handleAnalyze}
+            disabled={phase === 'analyzing'}
+            className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:text-gray-500 text-white font-semibold py-4 px-4 rounded-xl transition-colors flex items-center justify-center gap-2.5 text-base shadow-lg shadow-purple-900/30"
+          >
+            {phase === 'analyzing' ? (
+              <><Loader2 className="animate-spin h-5 w-5" />{analyzeStatus || 'Analyzing…'}</>
+            ) : (
+              <><Brain className="h-5 w-5" /> Analyze with AI &nbsp;<span className="text-purple-300 text-sm font-normal">(Senior DevOps)</span></>
+            )}
+          </button>
+
+          {/* Analyzing progress steps */}
+          {phase === 'analyzing' && (
+            <div className="bg-gray-800/60 border border-gray-700 rounded-xl p-4 flex items-center gap-3">
+              <div className="flex gap-1 shrink-0">
+                {['Uploading', 'Processing', 'Analysing', 'Done'].map((_, i) => (
+                  <span key={i} className={`h-1.5 w-6 rounded-full ${i < 3 ? 'bg-purple-500 animate-pulse' : 'bg-gray-700'}`} />
+                ))}
+              </div>
+              <p className="text-gray-400 text-sm">{analyzeStatus}</p>
+            </div>
+          )}
+
+          {/* Re-upload link */}
+          {phase !== 'analyzing' && (
+            <button
+              onClick={handleReset}
+              className="w-full flex items-center justify-center gap-2 py-2.5 border border-gray-700 hover:border-gray-500 text-gray-500 hover:text-gray-300 rounded-xl transition-colors text-sm"
+            >
+              <RotateCcw className="h-3.5 w-3.5" /> Upload a different file
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── PHASE: ANALYZED ── */}
+      {phase === 'analyzed' && analysis && uploadResult && sc && (
+        <div className="space-y-5">
+
+          {/* Severity/header banner */}
           <div className={`rounded-xl border p-5 flex items-center justify-between gap-4 ${sc.bg} ${sc.border}`}>
             <div className="flex items-center gap-4">
-              <div className="p-3 bg-black/30 rounded-full">
+              <div className="p-3 bg-black/30 rounded-full shrink-0">
                 <Brain className={`h-7 w-7 ${sc.text}`} />
               </div>
               <div>
-                <p className="text-xs text-gray-400 uppercase tracking-wide mb-0.5">AI Analysis Complete</p>
+                <p className="text-xs text-gray-400 uppercase tracking-wide mb-0.5">AI Analysis Complete · Senior DevOps</p>
                 <p className="text-white font-bold text-lg">{file?.name}</p>
-                <p className="text-gray-400 text-sm">{uploadResult.entries_count} log entries processed</p>
+                <p className="text-gray-400 text-sm">{uploadResult.entries_count} log entries analysed</p>
               </div>
             </div>
             <div className="flex flex-col items-end gap-2 shrink-0">
@@ -149,15 +286,31 @@ const UploadPage: React.FC = () => {
             </div>
           </div>
 
+          {/* Action buttons */}
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={() => navigate('/dashboard')}
+              className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-xl transition-colors"
+            >
+              <BarChart3 className="h-4 w-4" /> Go to Dashboard <ArrowRight className="h-4 w-4 ml-auto" />
+            </button>
+            <button
+              onClick={handleReset}
+              className="flex items-center justify-center gap-2 border border-gray-600 hover:border-gray-400 text-gray-400 hover:text-white py-3 px-4 rounded-xl transition-colors text-sm font-medium"
+            >
+              <RotateCcw className="h-4 w-4" /> Upload Another File
+            </button>
+          </div>
+
           {/* Stats row */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
-              { label: 'Anomalies',    value: analysis.anomalies.length,           color: 'text-red-400' },
-              { label: 'Root Causes',  value: analysis.root_causes.length,          color: 'text-orange-400' },
-              { label: 'Config Issues',value: (analysis.config_issues ?? []).length, color: 'text-yellow-400' },
-              { label: 'Resolutions',  value: analysis.resolutions.length,          color: 'text-green-400' },
+              { label: 'Anomalies',     value: analysis.anomalies.length,            color: 'text-red-400',    bg: 'bg-red-500/10 border-red-500/20' },
+              { label: 'Root Causes',   value: analysis.root_causes.length,           color: 'text-orange-400', bg: 'bg-orange-500/10 border-orange-500/20' },
+              { label: 'Config Issues', value: (analysis.config_issues ?? []).length, color: 'text-yellow-400', bg: 'bg-yellow-500/10 border-yellow-500/20' },
+              { label: 'Resolutions',   value: analysis.resolutions.length,           color: 'text-green-400',  bg: 'bg-green-500/10 border-green-500/20' },
             ].map(stat => (
-              <div key={stat.label} className="bg-gray-800 border border-gray-700 rounded-xl p-4 text-center">
+              <div key={stat.label} className={`border rounded-xl p-4 text-center ${stat.bg}`}>
                 <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
                 <p className="text-xs text-gray-500 mt-1">{stat.label}</p>
               </div>
@@ -178,62 +331,45 @@ const UploadPage: React.FC = () => {
 
           {/* Anomalies */}
           {analysis.anomalies.length > 0 && (
-            <Section
-              icon={<ShieldAlert className="h-4 w-4" />}
-              title="Anomalies Detected"
-              accent="text-red-400"
-              items={analysis.anomalies}
-            />
+            <Section icon={<ShieldAlert className="h-4 w-4" />} title="Anomalies Detected" accent="text-red-400" items={analysis.anomalies} />
           )}
 
           {/* Config Issues */}
           {(analysis.config_issues ?? []).length > 0 && (
-            <Section
-              icon={<Wrench className="h-4 w-4" />}
-              title="Configuration Issues"
-              accent="text-yellow-400"
-              items={analysis.config_issues!}
-            />
+            <Section icon={<Wrench className="h-4 w-4" />} title="Configuration Issues" accent="text-yellow-400" items={analysis.config_issues!} />
           )}
 
           {/* Performance Insights */}
           {(analysis.performance_insights ?? []).length > 0 && (
-            <Section
-              icon={<Zap className="h-4 w-4" />}
-              title="Performance Insights"
-              accent="text-purple-400"
-              items={analysis.performance_insights!}
-            />
+            <Section icon={<Zap className="h-4 w-4" />} title="Performance Insights" accent="text-purple-400" items={analysis.performance_insights!} />
           )}
 
           {/* Root Causes */}
           {analysis.root_causes.length > 0 && (
-            <Section
-              icon={<GitBranch className="h-4 w-4" />}
-              title="Potential Root Causes"
-              accent="text-orange-400"
-              items={analysis.root_causes}
-            />
+            <Section icon={<GitBranch className="h-4 w-4" />} title="Potential Root Causes" accent="text-orange-400" items={analysis.root_causes} />
           )}
 
           {/* Resolutions */}
           {analysis.resolutions.length > 0 && (
-            <Section
-              icon={<CheckCircle className="h-4 w-4" />}
-              title="Suggested Resolutions"
-              accent="text-green-400"
-              items={analysis.resolutions}
-            />
+            <Section icon={<CheckCircle className="h-4 w-4" />} title="Suggested Resolutions" accent="text-green-400" items={analysis.resolutions} />
           )}
 
-          {/* Upload another */}
-          <button
-            onClick={handleReset}
-            className="w-full flex items-center justify-center gap-2 py-3 border border-gray-600 hover:border-gray-400 text-gray-400 hover:text-white rounded-xl transition-colors text-sm font-medium"
-          >
-            <RotateCcw className="h-4 w-4" />
-            Upload Another File
-          </button>
+          {/* Bottom actions (repeat for convenience) */}
+          <div className="grid grid-cols-2 gap-3 pt-2">
+            <button
+              onClick={() => navigate('/dashboard')}
+              className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-xl transition-colors"
+            >
+              <BarChart3 className="h-4 w-4" /> Go to Dashboard
+            </button>
+            <button
+              onClick={handleReset}
+              className="flex items-center justify-center gap-2 border border-gray-600 hover:border-gray-400 text-gray-400 hover:text-white py-3 px-4 rounded-xl transition-colors text-sm font-medium"
+            >
+              <RotateCcw className="h-4 w-4" /> Upload Another File
+            </button>
+          </div>
+
         </div>
       )}
     </div>

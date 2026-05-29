@@ -265,10 +265,10 @@ const DashboardPage: React.FC = () => {
   const uniqueCount = sortedGroupNames.length;
 
   return (
-    <div className="flex gap-5 items-start">
+    <div className="flex gap-6 items-start w-full">
 
       {/* ── LEFT SIDEBAR: Session History ── */}
-      <aside className="w-56 shrink-0 self-start sticky top-6 rounded-xl border border-gray-700 overflow-hidden flex flex-col" style={{ background: '#0f172a', maxHeight: 'calc(100vh - 6rem)' }}>
+      <aside className="w-72 shrink-0 self-start sticky top-6 rounded-xl border border-gray-700/80 overflow-hidden flex flex-col shadow-lg" style={{ background: '#0b1120', maxHeight: 'calc(100vh - 6rem)' }}>
         <div className="px-4 py-4 border-b border-gray-700 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <History className="h-4 w-4 text-purple-400" />
@@ -406,9 +406,9 @@ const DashboardPage: React.FC = () => {
 
       {/* ── MAIN CONTENT ── */}
       <main className="flex-1 min-w-0 space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold text-white mb-1">Analytics Dashboard</h1>
-          <p className="text-gray-400 text-sm">View log analytics and metrics</p>
+        <div className="flex flex-col gap-1.5 pb-5 border-b border-gray-700/50">
+          <h1 className="text-3xl font-extrabold text-white tracking-tight">Analytics Dashboard</h1>
+          <p className="text-gray-400 text-sm">Monitor log analytics, anomalies and resource health metrics</p>
         </div>
 
         {error && (
@@ -419,12 +419,12 @@ const DashboardPage: React.FC = () => {
         )}
 
         {/* Filters & Resources */}
-        <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
-          <div className="px-5 py-3 border-b border-gray-700 flex items-center gap-2">
+        <div className="bg-gray-800/70 rounded-xl border border-gray-700 overflow-hidden shadow-md">
+          <div className="px-6 py-3.5 border-b border-gray-700 flex items-center gap-2 bg-gray-800">
             <Filter className="h-4 w-4 text-blue-400" />
-            <h2 className="text-sm font-semibold text-gray-200 uppercase tracking-wide">Filters &amp; Resources</h2>
+            <h2 className="text-sm font-semibold text-gray-200 uppercase tracking-wider">Filters &amp; Resources</h2>
           </div>
-          <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
             {/* Scrollable resource list */}
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Resource</label>
@@ -528,45 +528,45 @@ const DashboardPage: React.FC = () => {
         </div>
 
         {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-gray-800 rounded-lg p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-400 text-sm">Total Entries</p>
-              <p className="text-2xl font-bold text-white">{entries.length}</p>
-            </div>
-            <BarChart3 className="h-8 w-8 text-blue-400" />
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 flex items-center gap-4 shadow-sm hover:border-blue-600/50 transition-colors">
+          <div className="rounded-lg p-3 bg-blue-500/10 border border-blue-500/20 shrink-0">
+            <BarChart3 className="h-6 w-6 text-blue-400" />
+          </div>
+          <div>
+            <p className="text-gray-400 text-xs font-medium uppercase tracking-wide">Total Entries</p>
+            <p className="text-3xl font-bold text-white leading-none mt-1">{entries.length}</p>
           </div>
         </div>
-        <div className="bg-gray-800 rounded-lg p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-400 text-sm">Errors</p>
-              <p className="text-2xl font-bold text-red-400">
-                {entries.filter(e => e.level === 'ERROR' || e.level === 'CRITICAL').length}
-              </p>
-            </div>
-            <AlertCircle className="h-8 w-8 text-red-400" />
+        <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 flex items-center gap-4 shadow-sm hover:border-red-600/50 transition-colors">
+          <div className="rounded-lg p-3 bg-red-500/10 border border-red-500/20 shrink-0">
+            <AlertCircle className="h-6 w-6 text-red-400" />
+          </div>
+          <div>
+            <p className="text-gray-400 text-xs font-medium uppercase tracking-wide">Errors</p>
+            <p className="text-3xl font-bold text-red-400 leading-none mt-1">
+              {entries.filter(e => e.level === 'ERROR' || e.level === 'CRITICAL').length}
+            </p>
           </div>
         </div>
-        <div className="bg-gray-800 rounded-lg p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-400 text-sm">Warnings</p>
-              <p className="text-2xl font-bold text-yellow-400">
-                {entries.filter(e => e.level === 'WARNING').length}
-              </p>
-            </div>
-            <TrendingUp className="h-8 w-8 text-yellow-400" />
+        <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 flex items-center gap-4 shadow-sm hover:border-yellow-600/50 transition-colors">
+          <div className="rounded-lg p-3 bg-yellow-500/10 border border-yellow-500/20 shrink-0">
+            <TrendingUp className="h-6 w-6 text-yellow-400" />
+          </div>
+          <div>
+            <p className="text-gray-400 text-xs font-medium uppercase tracking-wide">Warnings</p>
+            <p className="text-3xl font-bold text-yellow-400 leading-none mt-1">
+              {entries.filter(e => e.level === 'WARNING').length}
+            </p>
           </div>
         </div>
-        <div className="bg-gray-800 rounded-lg p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-400 text-sm">Resources</p>
-              <p className="text-2xl font-bold text-white">{resources.length}</p>
-            </div>
-            <PieChart className="h-8 w-8 text-green-400" />
+        <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 flex items-center gap-4 shadow-sm hover:border-green-600/50 transition-colors">
+          <div className="rounded-lg p-3 bg-green-500/10 border border-green-500/20 shrink-0">
+            <PieChart className="h-6 w-6 text-green-400" />
+          </div>
+          <div>
+            <p className="text-gray-400 text-xs font-medium uppercase tracking-wide">Resources</p>
+            <p className="text-3xl font-bold text-white leading-none mt-1">{resources.length}</p>
           </div>
         </div>
       </div>
@@ -574,17 +574,17 @@ const DashboardPage: React.FC = () => {
       {/* Charts */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Log Level Distribution - Donut chart with legend */}
-        <div className="bg-gray-800 rounded-lg p-4">
-          <h2 className="text-lg font-semibold text-white mb-4">Log Level Distribution</h2>
+        <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 shadow-sm">
+          <h2 className="text-base font-semibold text-white mb-4 flex items-center gap-2"><PieChart className="h-4 w-4 text-purple-400" />Log Level Distribution</h2>
           {levelChartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={300}>
+            <ResponsiveContainer width="100%" height={360}>
               <RechartsPieChart>
                 <Pie
                   data={levelChartData}
                   cx="50%"
                   cy="45%"
-                  innerRadius={55}
-                  outerRadius={95}
+                  innerRadius={65}
+                  outerRadius={110}
                   dataKey="count"
                   nameKey="level"
                   labelLine={false}
@@ -605,15 +605,15 @@ const DashboardPage: React.FC = () => {
               </RechartsPieChart>
             </ResponsiveContainer>
           ) : (
-            <p className="text-gray-500 text-center py-8">No data available</p>
+            <p className="text-gray-500 text-center py-12">No data available</p>
           )}
         </div>
 
         {/* Log Entries per Resource - horizontal or vertical bar with angled labels */}
-        <div className="bg-gray-800 rounded-lg p-4">
-          <h2 className="text-lg font-semibold text-white mb-4">Log Entries per Resource</h2>
+        <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 shadow-sm">
+          <h2 className="text-base font-semibold text-white mb-4 flex items-center gap-2"><BarChart3 className="h-4 w-4 text-blue-400" />Log Entries per Resource</h2>
           {resourceChartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={300}>
+            <ResponsiveContainer width="100%" height={360}>
               <BarChart
                 data={resourceChartData}
                 margin={{ top: 8, right: 16, left: 0, bottom: resourceChartData.length > 4 ? 60 : 20 }}
@@ -645,45 +645,52 @@ const DashboardPage: React.FC = () => {
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <p className="text-gray-500 text-center py-8">No data available</p>
+            <p className="text-gray-500 text-center py-12">No data available</p>
           )}
         </div>
       </div>
 
       {/* Recent Logs Table */}
-      <div className="bg-gray-800 rounded-lg p-4">
-        <h2 className="text-lg font-semibold text-white mb-4">Recent Log Entries</h2>
+      <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden shadow-sm">
+        <div className="px-6 py-4 border-b border-gray-700 flex items-center gap-2 bg-gray-800">
+          <FileText className="h-4 w-4 text-green-400" />
+          <h2 className="text-sm font-semibold text-gray-200 uppercase tracking-wider">Recent Log Entries</h2>
+          {entries.length > 0 && (
+            <span className="ml-auto text-xs text-gray-500">Showing {Math.min(entries.length, 20)} of {entries.length}</span>
+          )}
+        </div>
         <div className="overflow-x-auto">
-          <table className="min-w-full">
+          <table className="min-w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-700">
-                <th className="text-left text-gray-400 font-medium py-2 px-4">Timestamp</th>
-                <th className="text-left text-gray-400 font-medium py-2 px-4">Level</th>
-                <th className="text-left text-gray-400 font-medium py-2 px-4">Message</th>
-                <th className="text-left text-gray-400 font-medium py-2 px-4">Source</th>
+              <tr className="bg-gray-900/50">
+                <th className="text-left text-gray-500 font-medium py-3 px-5 text-xs uppercase tracking-wide w-44">Timestamp</th>
+                <th className="text-left text-gray-500 font-medium py-3 px-4 text-xs uppercase tracking-wide w-24">Level</th>
+                <th className="text-left text-gray-500 font-medium py-3 px-4 text-xs uppercase tracking-wide">Message</th>
+                <th className="text-left text-gray-500 font-medium py-3 px-5 text-xs uppercase tracking-wide w-48">Source</th>
               </tr>
             </thead>
-            <tbody>
-              {entries.slice(0, 20).map((entry) => (
-                <tr key={entry.id} className="border-b border-gray-700 hover:bg-gray-700">
-                  <td className="py-2 px-4 text-gray-300 text-sm">
+            <tbody className="divide-y divide-gray-700/50">
+              {entries.slice(0, 20).map((entry, idx) => (
+                <tr key={entry.id} className={`hover:bg-gray-700/40 transition-colors ${idx % 2 === 0 ? '' : 'bg-gray-900/20'}`}>
+                  <td className="py-3 px-5 text-gray-400 text-xs tabular-nums">
                     {entry.timestamp ? new Date(entry.timestamp).toLocaleString() : '-'}
                   </td>
-                  <td className="py-2 px-4">
+                  <td className="py-3 px-4">
                     <span
-                      className="px-2 py-1 rounded text-xs font-medium"
+                      className="px-2 py-0.5 rounded-md text-xs font-semibold border"
                       style={{
-                        backgroundColor: getLevelColor(entry.level || 'INFO') + '20',
-                        color: getLevelColor(entry.level || 'INFO')
+                        backgroundColor: getLevelColor(entry.level || 'INFO') + '18',
+                        color: getLevelColor(entry.level || 'INFO'),
+                        borderColor: getLevelColor(entry.level || 'INFO') + '40',
                       }}
                     >
                       {entry.level || 'INFO'}
                     </span>
                   </td>
-                  <td className="py-2 px-4 text-gray-300 text-sm truncate max-w-xs">
-                    {entry.message}
+                  <td className="py-3 px-4 text-gray-300 max-w-xl">
+                    <p className="truncate">{entry.message}</p>
                   </td>
-                  <td className="py-2 px-4 text-gray-400 text-sm">
+                  <td className="py-3 px-5 text-gray-500 text-xs truncate max-w-[12rem]">
                     {entry.source_file || `Resource ${entry.resource_id}`}
                   </td>
                 </tr>
@@ -691,7 +698,11 @@ const DashboardPage: React.FC = () => {
             </tbody>
           </table>
           {entries.length === 0 && (
-            <p className="text-gray-500 text-center py-8">No log entries found</p>
+            <div className="flex flex-col items-center justify-center py-16 text-center">
+              <FileText className="h-10 w-10 text-gray-700 mb-3" />
+              <p className="text-gray-500">No log entries found</p>
+              <p className="text-gray-600 text-xs mt-1">Upload a file or collect logs from a pod</p>
+            </div>
           )}
         </div>
       </div>
