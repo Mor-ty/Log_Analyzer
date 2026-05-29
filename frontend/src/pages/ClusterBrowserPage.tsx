@@ -4,6 +4,8 @@ import { Server, Activity, AlertCircle, Loader2, ChevronDown, ChevronRight, Chec
 import { k8sAPI, logAPI, parseAnalysis } from '../services/api';
 import { K8sPodInfo, ClusterHealth, AnalysisResult } from '../types';
 
+const SESSION_KEY = 'clusterBrowserState';
+
 const ClusterBrowserPage: React.FC = () => {
   const navigate = useNavigate();
   const [health, setHealth] = useState<ClusterHealth | null>(null);
@@ -12,18 +14,41 @@ const ClusterBrowserPage: React.FC = () => {
   const [pods, setPods] = useState<K8sPodInfo[]>([]);
   const [selectedPod, setSelectedPod] = useState<K8sPodInfo | null>(null);
   const [logs, setLogs] = useState<any[]>([]);
+  const [currentResourceId, setCurrentResourceId] = useState<number | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeStatus, setAnalyzeStatus] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [expandedPods, setExpandedPods] = useState<Set<string>>(new Set());
-  const [currentResourceId, setCurrentResourceId] = useState<number | null>(null);
 
+  // Hold saved namespace in a ref so loadClusterData can use it after async fetch
+  const savedNamespaceRef = React.useRef<string | null>(null);
+
+  // Restore only namespace + last viewed logs on mount
   useEffect(() => {
+    const saved = sessionStorage.getItem(SESSION_KEY);
+    if (saved) {
+      try {
+        const s = JSON.parse(saved);
+        if (s.selectedNamespace) savedNamespaceRef.current = s.selectedNamespace;
+        if (s.logs?.length) setLogs(s.logs);
+        if (s.selectedPod) setSelectedPod(s.selectedPod);
+      } catch { /* ignore */ }
+    }
     loadClusterData();
   }, []);
+
+  // Persist only namespace + last viewed logs/pod
+  useEffect(() => {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+      selectedNamespace,
+      selectedPod,
+      logs,
+    }));
+  }, [selectedNamespace, selectedPod, logs]);
 
   const loadClusterData = async () => {
     setLoading(true);
@@ -35,7 +60,11 @@ const ClusterBrowserPage: React.FC = () => {
       ]);
       setHealth(healthData);
       setNamespaces(namespacesData.namespaces);
-      if (namespacesData.namespaces.length > 0) {
+      // Use saved namespace if it still exists in the cluster, otherwise fall back to first
+      const savedNs = savedNamespaceRef.current;
+      if (savedNs && namespacesData.namespaces.includes(savedNs)) {
+        setSelectedNamespace(savedNs);
+      } else if (namespacesData.namespaces.length > 0) {
         setSelectedNamespace(namespacesData.namespaces[0]);
       }
     } catch (err) {
@@ -70,8 +99,10 @@ const ClusterBrowserPage: React.FC = () => {
     setSelectedPod(pod);
     setAnalysis(null);
     try {
-      const logsData = await k8sAPI.getPodLogs(pod.namespace, pod.name);
+      // store=false: view only, does NOT persist to DB or Dashboard
+      const logsData = await k8sAPI.getPodLogs(pod.namespace, pod.name, undefined, 100, false);
       setLogs(logsData.logs);
+      setCurrentResourceId(null); // no DB resource created
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load logs');
     } finally {
@@ -79,48 +110,59 @@ const ClusterBrowserPage: React.FC = () => {
     }
   };
 
-  const analyzeLogs = async () => {
-    if (!selectedPod) return;
-
+  const analyzeLogs = async (pod: K8sPodInfo) => {
     setAnalyzing(true);
+    setAnalyzeStatus('Collecting logs...');
     setError(null);
     setSuccessMessage(null);
-    
+
     try {
-      // Load logs first if not already loaded
-      if (logs.length === 0) {
-        const logsData = await k8sAPI.getPodLogs(selectedPod.namespace, selectedPod.name);
-        setLogs(logsData.logs);
-        
-        if (logsData.logs.length === 0) {
-          setError('No logs available for this pod');
-          setAnalyzing(false);
-          return;
-        }
+      // Fetch logs with store=true to persist to DB before analysis
+      let resourceId = currentResourceId;
+      let podLogs = logs;
+      if (!selectedPod || selectedPod.name !== pod.name || podLogs.length === 0) {
+        const logsData = await k8sAPI.getPodLogs(pod.namespace, pod.name, undefined, 100, true);
+        podLogs = logsData.logs;
+        resourceId = logsData.resource_id ?? null;
+        setLogs(podLogs);
+        setSelectedPod(pod);
+        setCurrentResourceId(resourceId);
+      } else if (resourceId === null) {
+        // Logs were fetched without store=true before; re-fetch with store=true now
+        const logsData = await k8sAPI.getPodLogs(pod.namespace, pod.name, undefined, 100, true);
+        podLogs = logsData.logs;
+        resourceId = logsData.resource_id ?? null;
+        setCurrentResourceId(resourceId);
       }
-      
-      // Perform analysis
-      const analysisData = await logAPI.analyzeLogs(undefined, selectedPod.name, 'general');
+
+      if (podLogs.length === 0) {
+        setError('No logs available for this pod');
+        return;
+      }
+
+      setAnalyzeStatus('Running AI analysis...');
+      // Use resource_id so the backend can find the stored entries
+      const analysisData = await logAPI.analyzeLogs(resourceId ?? undefined, undefined, 'general');
       const parsedAnalysis = parseAnalysis(analysisData);
       setAnalysis(parsedAnalysis);
-      
-      // Show success message and redirect to dashboard
-      setSuccessMessage(`Logs from ${selectedPod.name} analyzed successfully!`);
-      
+
+      setAnalyzeStatus('Done!');
+      setSuccessMessage(`Analysis complete for ${pod.name}! Redirecting to Dashboard...`);
+
       setTimeout(() => {
-        navigate('/dashboard', { 
-          state: { 
+        navigate('/dashboard', {
+          state: {
             analysis: parsedAnalysis,
-            sourcePod: selectedPod.name,
-            sourceNamespace: selectedPod.namespace
-          } 
+            sourcePod: pod.name,
+            sourceNamespace: pod.namespace,
+          },
         });
-      }, 1500);
-      
+      }, 1200);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Analysis failed');
     } finally {
       setAnalyzing(false);
+      setAnalyzeStatus('');
     }
   };
 
@@ -262,11 +304,13 @@ const ClusterBrowserPage: React.FC = () => {
                         {loadingLogs && selectedPod?.name === pod.name ? 'Loading...' : 'View Logs'}
                       </button>
                       <button
-                        onClick={analyzeLogs}
-                        disabled={analyzing || logs.length === 0}
+                        onClick={() => analyzeLogs(pod)}
+                        disabled={analyzing}
                         className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white text-sm px-3 py-1 rounded"
                       >
-                        {analyzing ? 'Analyzing...' : 'Analyze'}
+                        {analyzing && selectedPod?.name === pod.name
+                          ? analyzeStatus || 'Analyzing...'
+                          : 'Analyze'}
                       </button>
                     </div>
                     <div className="text-sm text-gray-400">

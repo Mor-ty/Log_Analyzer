@@ -48,24 +48,36 @@ def get_pod_logs(
     pod_name: str,
     container: Optional[str] = None,
     tail_lines: int = 100,
+    store: bool = False,
     db: Session = Depends(get_db)
 ):
-    """Get logs from a specific pod."""
+    """Get logs from a specific pod. Set store=true to persist to DB."""
     try:
         logs = collector.get_pod_logs(namespace, pod_name, container, tail_lines)
-        
+
         if not logs:
-            return {"logs": "", "message": "No logs found"}
-        
+            return {"logs": [], "message": "No logs found", "resource_id": None, "entries_count": 0, "raw_logs": ""}
+
         # Parse and structure the logs
         parsed_logs = log_parser.parse_k8s_log(logs, namespace, pod_name, container)
-        
-        # Get or create resource
+
+        if not store:
+            # View-only: return parsed logs without touching the DB
+            return {
+                "logs": parsed_logs,
+                "resource_id": None,
+                "pod_name": pod_name,
+                "namespace": namespace,
+                "entries_count": len(parsed_logs),
+                "raw_logs": logs
+            }
+
+        # store=True: persist resource + log entries to DB
         resource = db.query(K8sResource).filter_by(
             namespace=namespace,
             pod_name=pod_name
         ).first()
-        
+
         if not resource:
             resource = K8sResource(
                 namespace=namespace,
@@ -76,7 +88,7 @@ def get_pod_logs(
             db.add(resource)
             db.commit()
             db.refresh(resource)
-        
+
         # Store parsed logs
         entries_created = 0
         for entry in parsed_logs:
@@ -89,9 +101,9 @@ def get_pod_logs(
             )
             db.add(log_entry)
             entries_created += 1
-        
+
         db.commit()
-        
+
         return {
             "logs": parsed_logs,
             "resource_id": resource.id,
@@ -100,7 +112,7 @@ def get_pod_logs(
             "entries_count": entries_created,
             "raw_logs": logs
         }
-        
+
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))

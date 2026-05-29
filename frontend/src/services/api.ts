@@ -6,7 +6,8 @@ import {
   LogUploadResponse,
   K8sPodInfo,
   ClusterHealth,
-  AnalysisResult
+  AnalysisResult,
+  LogSession
 } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
@@ -41,6 +42,19 @@ export const logAPI = {
   getResources: async (): Promise<K8sResource[]> => {
     const response = await api.get<K8sResource[]>('/logs/resources');
     return response.data;
+  },
+
+  deleteResource: async (resourceId: number): Promise<void> => {
+    await api.delete(`/logs/resources/${resourceId}`);
+  },
+
+  getSessions: async (): Promise<LogSession[]> => {
+    const response = await api.get<LogSession[]>('/logs/sessions');
+    return response.data;
+  },
+
+  deleteSession: async (sessionId: number): Promise<void> => {
+    await api.delete(`/logs/sessions/${sessionId}`);
   },
 
   analyzeLogs: async (resourceId?: number, sourceFile?: string, analysisType = 'general'): Promise<LogAnalysis> => {
@@ -78,14 +92,15 @@ export const k8sAPI = {
     namespace: string,
     podName: string,
     container?: string,
-    tailLines = 100
+    tailLines = 100,
+    store = false
   ): Promise<{
     logs: any[];
-    resource_id: number;
+    resource_id: number | null;
     entries_count: number;
     raw_logs: string;
   }> => {
-    const params: any = { tail_lines: tailLines };
+    const params: any = { tail_lines: tailLines, store };
     if (container) params.container = container;
     const response = await api.get(`/k8s/logs/${namespace}/${podName}`, { params });
     return response.data;

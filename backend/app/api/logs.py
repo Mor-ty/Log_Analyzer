@@ -1,14 +1,15 @@
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from app.core.database import get_db
-from app.models.log import LogEntry, K8sResource, LogAnalysis
+from app.models.log import LogEntry, K8sResource, LogAnalysis, LogSession
 from app.models.schemas import (
-    LogEntryResponse, 
-    LogUploadResponse, 
+    LogEntryResponse,
+    LogUploadResponse,
     LogAnalysisRequest,
     LogAnalysisResponse,
-    K8sResourceResponse
+    K8sResourceResponse,
+    LogSessionResponse
 )
 from app.services.log_parser import LogParser
 from app.services.llm_analyzer import LLMLogAnalyzer
@@ -101,7 +102,20 @@ async def upload_log_file(
             db.add(log_analysis)
             db.commit()
             db.refresh(log_analysis)
-            
+
+            # Auto-create session for uploaded file
+            severity = analysis.get('severity', None)
+            session = LogSession(
+                name=file.filename,
+                source_type='file',
+                resource_id=resource.id,
+                analysis_id=log_analysis.id,
+                entry_count=entries_created,
+                severity=severity
+            )
+            db.add(session)
+            db.commit()
+
             analysis_id = log_analysis.id
         except Exception as analysis_error:
             print(f"Analysis failed during upload: {analysis_error}")
@@ -197,7 +211,25 @@ def analyze_logs(
         db.add(log_analysis)
         db.commit()
         db.refresh(log_analysis)
-        
+
+        # Determine severity and auto-create session
+        severity = analysis.get('severity', None)
+        resource_name = (
+            db.query(K8sResource).filter(K8sResource.id == request.resource_id).first().pod_name
+            if request.resource_id
+            else (request.source_file or 'Unknown')
+        )
+        session = LogSession(
+            name=resource_name,
+            source_type='pod' if request.resource_id else 'file',
+            resource_id=request.resource_id,
+            analysis_id=log_analysis.id,
+            entry_count=len(log_entries),
+            severity=severity
+        )
+        db.add(session)
+        db.commit()
+
         return log_analysis
         
     except HTTPException:
@@ -214,3 +246,58 @@ def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
     if not analysis:
         raise HTTPException(status_code=404, detail="Analysis not found")
     return analysis
+
+
+@router.delete("/resources/{resource_id}")
+def delete_resource(resource_id: int, db: Session = Depends(get_db)):
+    """Delete a resource and all its associated log entries and analyses."""
+    resource = db.query(K8sResource).filter(K8sResource.id == resource_id).first()
+    if not resource:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    db.query(LogSession).filter(LogSession.resource_id == resource_id).delete()
+    db.query(LogAnalysis).filter(LogAnalysis.resource_id == resource_id).delete()
+    db.query(LogEntry).filter(LogEntry.resource_id == resource_id).delete()
+    db.delete(resource)
+    db.commit()
+    return {"message": "Resource deleted successfully"}
+
+
+# ── Session endpoints ──────────────────────────────────────────────────────────
+
+@router.get("/sessions", response_model=List[LogSessionResponse])
+def get_sessions(db: Session = Depends(get_db)):
+    """List all log analysis sessions, newest first."""
+    sessions = (
+        db.query(LogSession)
+        .order_by(LogSession.created_at.desc())
+        .all()
+    )
+    result = []
+    for s in sessions:
+        analysis = None
+        if s.analysis_id:
+            analysis = db.query(LogAnalysis).filter(LogAnalysis.id == s.analysis_id).first()
+        item = LogSessionResponse(
+            id=s.id,
+            name=s.name,
+            source_type=s.source_type,
+            resource_id=s.resource_id,
+            analysis_id=s.analysis_id,
+            entry_count=s.entry_count,
+            severity=s.severity,
+            created_at=s.created_at,
+            analysis=LogAnalysisResponse.model_validate(analysis) if analysis else None
+        )
+        result.append(item)
+    return result
+
+
+@router.delete("/sessions/{session_id}")
+def delete_session(session_id: int, db: Session = Depends(get_db)):
+    """Delete a session record (does not delete logs or resource)."""
+    session = db.query(LogSession).filter(LogSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    db.delete(session)
+    db.commit()
+    return {"message": "Session deleted"}

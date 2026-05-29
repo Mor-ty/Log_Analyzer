@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { BarChart3, PieChart, TrendingUp, Loader2, AlertCircle, Filter, Brain } from 'lucide-react';
+import { BarChart3, PieChart, TrendingUp, Loader2, AlertCircle, Filter, Brain, Trash2, Server, Clock, FileText, History, ChevronDown, ChevronUp } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 import { logAPI, parseAnalysis } from '../services/api';
-import { LogEntry, K8sResource } from '../types';
+import { LogEntry, K8sResource, LogSession } from '../types';
 import {
   BarChart,
   Bar,
@@ -17,6 +18,7 @@ import {
 } from 'recharts';
 
 const DashboardPage: React.FC = () => {
+  const location = useLocation();
   const [resources, setResources] = useState<K8sResource[]>([]);
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [selectedResource, setSelectedResource] = useState<number | null>(null);
@@ -27,9 +29,27 @@ const DashboardPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<any>(null);
   const [showAnalysisPopup, setShowAnalysisPopup] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [sessions, setSessions] = useState<LogSession[]>([]);
+  const [deletingSessionId, setDeletingSessionId] = useState<number | null>(null);
+  const [confirmDeleteSessionId, setConfirmDeleteSessionId] = useState<number | null>(null);
+  const [expandedSessionId, setExpandedSessionId] = useState<number | null>(null);
+
+  // Show popup if redirected from Cluster page with analysis in state
+  useEffect(() => {
+    const navState = location.state as any;
+    if (navState?.analysis) {
+      setAnalysis(navState.analysis);
+      setShowAnalysisPopup(true);
+      // Clear navigation state so popup doesn't re-appear on manual refresh
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state]);
 
   useEffect(() => {
     loadResources();
+    loadSessions();
   }, []);
 
   useEffect(() => {
@@ -47,6 +67,13 @@ const DashboardPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadSessions = async () => {
+    try {
+      const data = await logAPI.getSessions();
+      setSessions(data);
+    } catch { /* non-critical */ }
   };
 
   const loadEntries = async () => {
@@ -68,18 +95,16 @@ const DashboardPage: React.FC = () => {
     setError(null);
     try {
       setAnalyzeStatus('Fetching log entries...');
-      await new Promise(resolve => setTimeout(resolve, 500)); // Simulate processing
-      
+      await new Promise(resolve => setTimeout(resolve, 500));
       setAnalyzeStatus('Running AI analysis...');
       const analysisData = await logAPI.analyzeLogs(resourceId, undefined, 'general');
-      
       setAnalyzeStatus('Processing results...');
-      await new Promise(resolve => setTimeout(resolve, 300)); // Simulate processing
-      
+      await new Promise(resolve => setTimeout(resolve, 300));
       const parsedAnalysis = parseAnalysis(analysisData);
       setAnalysis(parsedAnalysis);
       setAnalyzeStatus('Analysis complete!');
       setShowAnalysisPopup(true);
+      await loadSessions();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Analysis failed');
       setAnalyzeStatus('');
@@ -88,40 +113,125 @@ const DashboardPage: React.FC = () => {
     }
   };
 
+  const handleDeleteResource = async (resourceId: number) => {
+    setDeletingId(resourceId);
+    setError(null);
+    try {
+      await logAPI.deleteResource(resourceId);
+      if (selectedResource === resourceId) setSelectedResource(null);
+      await loadResources();
+      await loadEntries();
+      await loadSessions();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete resource');
+    } finally {
+      setDeletingId(null);
+      setConfirmDeleteId(null);
+    }
+  };
+
+  const handleRestoreSession = (session: LogSession) => {
+    if (!session.analysis) return;
+    const parsed = parseAnalysis(session.analysis);
+    setAnalysis(parsed);
+    setShowAnalysisPopup(true);
+  };
+
+  const handleDeleteSession = async (sessionId: number) => {
+    setDeletingSessionId(sessionId);
+    try {
+      await logAPI.deleteSession(sessionId);
+      setSessions(prev => prev.filter(s => s.id !== sessionId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete session');
+    } finally {
+      setDeletingSessionId(null);
+      setConfirmDeleteSessionId(null);
+    }
+  };
+
   // Prepare data for charts
+  const LEVEL_COLORS: Record<string, string> = {
+    DEBUG:    '#8B5CF6',
+    INFO:     '#3B82F6',
+    WARNING:  '#F59E0B',
+    ERROR:    '#EF4444',
+    CRITICAL: '#DC2626',
+    UNKNOWN:  '#6B7280',
+  };
+
   const levelData = entries.reduce((acc, entry) => {
-    const level = entry.level || 'UNKNOWN';
+    const level = (entry.level || 'UNKNOWN').toUpperCase();
     acc[level] = (acc[level] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
 
-  const levelChartData = Object.entries(levelData).map(([level, count]) => ({
-    level,
-    count
-  }));
+  const levelChartData = Object.entries(levelData)
+    .map(([level, count]) => ({ level, count, fill: LEVEL_COLORS[level] ?? '#6B7280' }))
+    .sort((a, b) => {
+      const order = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL', 'UNKNOWN'];
+      return order.indexOf(a.level) - order.indexOf(b.level);
+    });
 
-  const resourceData = resources.map(resource => ({
-    name: resource.pod_name.length > 15 ? resource.pod_name.substring(0, 15) + '...' : resource.pod_name,
-    namespace: resource.namespace,
-    count: entries.filter(e => e.resource_id === resource.id).length
-  }));
+  const resourceChartData = resources
+    .map(r => ({
+      name: r.pod_name.length > 18 ? r.pod_name.substring(0, 18) + '…' : r.pod_name,
+      fullName: `${r.namespace}/${r.pod_name}`,
+      count: entries.filter(e => e.resource_id === r.id).length,
+    }))
+    .filter(r => r.count > 0)
+    .sort((a, b) => b.count - a.count);
 
-  const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'];
+  const getLevelColor = (level: string) => LEVEL_COLORS[(level || 'UNKNOWN').toUpperCase()] ?? '#6B7280';
 
-  const getLevelColor = (level: string) => {
-    switch (level) {
-      case 'ERROR':
-      case 'CRITICAL':
-        return '#EF4444';
-      case 'WARNING':
-        return '#F59E0B';
-      case 'INFO':
-        return '#3B82F6';
-      case 'DEBUG':
-        return '#8B5CF6';
-      default:
-        return '#10B981';
+  const getSeverityStyle = (severity?: string) => {
+    switch ((severity || '').toLowerCase()) {
+      case 'critical': return 'bg-red-900/60 text-red-300 border-red-700';
+      case 'high':     return 'bg-orange-900/60 text-orange-300 border-orange-700';
+      case 'warning':  return 'bg-yellow-900/60 text-yellow-300 border-yellow-700';
+      case 'low':
+      case 'normal':   return 'bg-green-900/60 text-green-300 border-green-700';
+      default:         return 'bg-gray-700 text-gray-300 border-gray-600';
     }
+  };
+
+  // Custom pie label renderer — only shown when slice is large enough
+  const renderPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, level }: any) => {
+    if (percent < 0.06) return null;
+    const RADIAN = Math.PI / 180;
+    const r = innerRadius + (outerRadius - innerRadius) * 0.6;
+    const x = cx + r * Math.cos(-midAngle * RADIAN);
+    const y = cy + r * Math.sin(-midAngle * RADIAN);
+    return (
+      <text x={x} y={y} fill="#fff" textAnchor="middle" dominantBaseline="central" fontSize={11} fontWeight={600}>
+        {level}
+      </text>
+    );
+  };
+
+  const CustomBarTooltip = ({ active, payload }: any) => {
+    if (active && payload?.length) {
+      return (
+        <div className="bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm">
+          <p className="text-white font-medium">{payload[0].payload.fullName}</p>
+          <p className="text-blue-400">{payload[0].value} entries</p>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  const CustomPieTooltip = ({ active, payload }: any) => {
+    if (active && payload?.length) {
+      const total = levelChartData.reduce((s, d) => s + d.count, 0);
+      return (
+        <div className="bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm">
+          <p style={{ color: payload[0].payload.fill }} className="font-semibold">{payload[0].name}</p>
+          <p className="text-white">{payload[0].value} entries ({((payload[0].value / total) * 100).toFixed(1)}%)</p>
+        </div>
+      );
+    }
+    return null;
   };
 
   if (loading && resources.length === 0) {
@@ -132,49 +242,221 @@ const DashboardPage: React.FC = () => {
     );
   }
 
+  // Count how many times each source name has been analysed
+  const analysisCountByName: Record<string, number> = {};
+  sessions.forEach(s => { analysisCountByName[s.name] = (analysisCountByName[s.name] || 0) + 1; });
+
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-white mb-2">Analytics Dashboard</h1>
-        <p className="text-gray-400">View log analytics and metrics</p>
-      </div>
+    <div className="flex gap-5 items-start">
 
-      {/* Error */}
-      {error && (
-        <div className="bg-red-900/50 border border-red-700 rounded-lg p-4 flex items-start">
-          <AlertCircle className="h-5 w-5 text-red-400 mr-3 mt-0.5" />
-          <p className="text-red-300">{error}</p>
+      {/* ── LEFT SIDEBAR: Session History ── */}
+      <aside className="w-56 shrink-0 self-start sticky top-6 rounded-xl border border-gray-700 overflow-hidden flex flex-col" style={{ background: '#0f172a', maxHeight: 'calc(100vh - 6rem)' }}>
+        <div className="px-4 py-4 border-b border-gray-700 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <History className="h-4 w-4 text-purple-400" />
+            <span className="text-sm font-semibold text-gray-200 uppercase tracking-wide">Sessions</span>
+          </div>
+          {sessions.length > 0 && (
+            <span className="bg-purple-600/30 text-purple-300 text-xs font-semibold px-2 py-0.5 rounded-full border border-purple-700/50">
+              {sessions.length}
+            </span>
+          )}
         </div>
-      )}
 
-        {/* Filters */}
-        <div className="bg-gray-800 rounded-lg p-4">
-          <h2 className="text-lg font-semibold text-white mb-3 flex items-center">
-            <Filter className="h-5 w-5 mr-2 text-blue-400" />
-            Filters
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">Resource</label>
-              <select
-                value={selectedResource || ''}
-                onChange={(e) => setSelectedResource(e.target.value ? Number(e.target.value) : null)}
-                className="w-full bg-gray-700 text-white rounded-md px-3 py-2 border border-gray-600 focus:outline-none focus:border-blue-500"
-              >
-                <option value="">All Resources</option>
-                {resources.map((resource) => (
-                  <option key={resource.id} value={resource.id}>
-                    {resource.namespace}/{resource.pod_name}
-                  </option>
-                ))}
-              </select>
+        <div className="overflow-y-auto" style={{ maxHeight: 'calc(100vh - 10rem)' }}>
+          {sessions.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+              <History className="h-10 w-10 text-gray-700 mb-3" />
+              <p className="text-gray-500 text-sm">No sessions yet</p>
+              <p className="text-gray-600 text-xs mt-1">Analyze a resource or upload a log file</p>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">Log Level</label>
+          ) : (
+            <div className="divide-y divide-gray-700/50">
+              {sessions.map((session) => {
+                const isExpanded = expandedSessionId === session.id;
+                const count = analysisCountByName[session.name] || 1;
+                return (
+                  <div key={session.id} className={`transition-colors ${isExpanded ? 'bg-gray-800/80' : 'hover:bg-gray-800/40'}`}>
+                    <div className="px-4 py-3 flex items-start gap-3">
+                      <div className="mt-0.5 shrink-0">
+                        {session.source_type === 'pod'
+                          ? <Server className="h-4 w-4 text-blue-400" />
+                          : <FileText className="h-4 w-4 text-green-400" />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-100 truncate leading-tight" title={session.name}>
+                          {session.name}
+                        </p>
+                        <div className="flex items-center gap-2 mt-1 flex-wrap">
+                          {session.severity && (
+                            <span className={`text-xs px-1.5 py-0.5 rounded border font-medium ${getSeverityStyle(session.severity)}`}>
+                              {session.severity}
+                            </span>
+                          )}
+                          <span className="text-xs text-gray-500">{session.entry_count} entries</span>
+                          {count > 1 && (
+                            <span className="text-xs text-purple-400 font-medium">{count}&times; analysed</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 mt-1 text-xs text-gray-600">
+                          <Clock className="h-3 w-3" />
+                          {new Date(session.created_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1 shrink-0">
+                        <button
+                          onClick={() => setExpandedSessionId(isExpanded ? null : session.id)}
+                          disabled={!session.analysis}
+                          title={session.analysis ? 'Toggle details' : 'No analysis stored'}
+                          className={`p-1 rounded transition-colors ${
+                            session.analysis ? 'text-gray-400 hover:text-purple-300 hover:bg-purple-900/30' : 'text-gray-700 cursor-not-allowed'
+                          }`}
+                        >
+                          {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                        </button>
+                        {confirmDeleteSessionId === session.id ? (
+                          <div className="flex gap-0.5">
+                            <button onClick={() => handleDeleteSession(session.id)} disabled={deletingSessionId === session.id}
+                              className="text-xs bg-red-600 hover:bg-red-700 text-white px-1.5 py-0.5 rounded">
+                              {deletingSessionId === session.id ? '…' : 'Y'}
+                            </button>
+                            <button onClick={() => setConfirmDeleteSessionId(null)}
+                              className="text-xs bg-gray-600 hover:bg-gray-500 text-white px-1.5 py-0.5 rounded">N</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => setConfirmDeleteSessionId(session.id)}
+                            className="p-1 text-gray-700 hover:text-red-400 rounded transition-colors">
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Inline expanded analysis */}
+                    {isExpanded && session.analysis && (() => {
+                      const a = parseAnalysis(session.analysis);
+                      return (
+                        <div className="px-4 pb-3 space-y-2 border-t border-gray-700/60 bg-gray-900/40">
+                          <div className="mt-2">
+                            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Health</p>
+                            <p className="text-xs text-gray-300 bg-gray-900 rounded p-2 leading-relaxed">{a.health_assessment || '—'}</p>
+                          </div>
+                          {a.anomalies?.length > 0 && (
+                            <div>
+                              <p className="text-xs font-semibold text-red-400 uppercase tracking-wide mb-1">Anomalies ({a.anomalies.length})</p>
+                              <ul className="space-y-0.5">
+                                {a.anomalies.slice(0, 3).map((x: string, i: number) => (
+                                  <li key={i} className="text-xs text-gray-300 flex gap-1"><span className="text-red-500 shrink-0">•</span>{x}</li>
+                                ))}
+                                {a.anomalies.length > 3 && <li className="text-xs text-gray-600">+{a.anomalies.length - 3} more…</li>}
+                              </ul>
+                            </div>
+                          )}
+                          {a.resolutions?.length > 0 && (
+                            <div>
+                              <p className="text-xs font-semibold text-green-400 uppercase tracking-wide mb-1">Resolutions</p>
+                              <ul className="space-y-0.5">
+                                {a.resolutions.slice(0, 2).map((x: string, i: number) => (
+                                  <li key={i} className="text-xs text-gray-300 flex gap-1"><span className="text-green-500 shrink-0">•</span>{x}</li>
+                                ))}
+                                {a.resolutions.length > 2 && <li className="text-xs text-gray-600">+{a.resolutions.length - 2} more…</li>}
+                              </ul>
+                            </div>
+                          )}
+                          <button onClick={() => handleRestoreSession(session)}
+                            className="w-full mt-1 bg-purple-700 hover:bg-purple-600 text-white text-xs font-medium py-1.5 rounded-md flex items-center justify-center gap-1.5 transition-colors">
+                            <Brain className="h-3 w-3" /> Full Analysis
+                          </button>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </aside>
+
+      {/* ── MAIN CONTENT ── */}
+      <main className="flex-1 min-w-0 space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold text-white mb-1">Analytics Dashboard</h1>
+          <p className="text-gray-400 text-sm">View log analytics and metrics</p>
+        </div>
+
+        {error && (
+          <div className="bg-red-900/50 border border-red-700 rounded-lg p-4 flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-red-400 shrink-0 mt-0.5" />
+            <p className="text-red-300 text-sm">{error}</p>
+          </div>
+        )}
+
+        {/* Filters & Resources */}
+        <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
+          <div className="px-5 py-3 border-b border-gray-700 flex items-center gap-2">
+            <Filter className="h-4 w-4 text-blue-400" />
+            <h2 className="text-sm font-semibold text-gray-200 uppercase tracking-wide">Filters &amp; Resources</h2>
+          </div>
+          <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-5">
+            {/* Scrollable resource list */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Resource</label>
+              <div className="border border-gray-600 rounded-lg bg-gray-900 overflow-y-auto" style={{ maxHeight: '11rem' }}>
+                <div
+                  className={`flex items-center gap-2 px-3 py-2 cursor-pointer border-b border-gray-700/60 transition-colors ${
+                    selectedResource === null ? 'bg-blue-600/20 text-blue-300' : 'text-gray-400 hover:bg-gray-700/50 hover:text-gray-200'
+                  }`}
+                  onClick={() => setSelectedResource(null)}
+                >
+                  <Server className="h-3.5 w-3.5 shrink-0" />
+                  <span className="text-sm font-medium">All Resources</span>
+                </div>
+                {resources.map((resource) => (
+                  <div
+                    key={resource.id}
+                    className={`group flex items-center justify-between px-3 py-2 border-b border-gray-700/40 last:border-0 transition-colors ${
+                      selectedResource === resource.id ? 'bg-blue-600/20' : 'hover:bg-gray-700/50'
+                    }`}
+                  >
+                    <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setSelectedResource(resource.id)}>
+                      <p className={`text-sm font-medium truncate leading-tight ${selectedResource === resource.id ? 'text-blue-300' : 'text-gray-200'}`}>
+                        {resource.pod_name}
+                      </p>
+                      <p className="text-xs text-gray-500 truncate">{resource.namespace}</p>
+                    </div>
+                    {confirmDeleteId === resource.id ? (
+                      <div className="flex items-center gap-1 ml-2 shrink-0">
+                        <button onClick={() => handleDeleteResource(resource.id)} disabled={deletingId === resource.id}
+                          className="text-xs bg-red-600 hover:bg-red-700 text-white px-2 py-0.5 rounded font-medium">
+                          {deletingId === resource.id ? '…' : 'Yes'}
+                        </button>
+                        <button onClick={() => setConfirmDeleteId(null)}
+                          className="text-xs bg-gray-600 hover:bg-gray-500 text-white px-2 py-0.5 rounded font-medium">
+                          No
+                        </button>
+                      </div>
+                    ) : (
+                      <button onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(resource.id); }}
+                        className="ml-2 shrink-0 opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 transition-opacity"
+                        title="Delete resource">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {resources.length === 0 && (
+                  <p className="text-gray-500 text-xs px-3 py-4 text-center">No resources yet</p>
+                )}
+              </div>
+            </div>
+            {/* Log Level */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Log Level</label>
               <select
                 value={selectedLevel || ''}
                 onChange={(e) => setSelectedLevel(e.target.value || null)}
-                className="w-full bg-gray-700 text-white rounded-md px-3 py-2 border border-gray-600 focus:outline-none focus:border-blue-500"
+                className="w-full bg-gray-900 text-gray-200 rounded-lg px-3 py-2 border border-gray-600 focus:outline-none focus:border-blue-500 text-sm h-9"
               >
                 <option value="">All Levels</option>
                 <option value="DEBUG">DEBUG</option>
@@ -183,34 +465,43 @@ const DashboardPage: React.FC = () => {
                 <option value="ERROR">ERROR</option>
                 <option value="CRITICAL">CRITICAL</option>
               </select>
+              <div className="grid grid-cols-2 gap-2 mt-1">
+                {[
+                  { label: 'Errors', count: entries.filter(e => e.level === 'ERROR' || e.level === 'CRITICAL').length, color: 'text-red-400' },
+                  { label: 'Warnings', count: entries.filter(e => e.level === 'WARNING').length, color: 'text-yellow-400' },
+                ].map(({ label, count, color }) => (
+                  <div key={label} className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-center">
+                    <p className={`text-lg font-bold ${color}`}>{count}</p>
+                    <p className="text-xs text-gray-500">{label}</p>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">Actions</label>
+            {/* Actions */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Actions</label>
               <button
                 onClick={() => selectedResource && handleAnalyze(selectedResource)}
                 disabled={!selectedResource || analyzing}
-                className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 text-white font-medium py-2 px-4 rounded-md transition flex items-center justify-center"
+                className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:text-gray-500 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm h-9"
               >
                 {analyzing ? (
-                  <>
-                    <Loader2 className="animate-spin h-4 w-4 mr-2" />
-                    {analyzeStatus || 'Analyzing...'}
-                  </>
+                  <><Loader2 className="animate-spin h-4 w-4" />{analyzeStatus || 'Analyzing…'}</>
                 ) : (
-                  <>
-                    <Brain className="h-4 w-4 mr-2" />
-                    Analyze with AI
-                  </>
+                  <><Brain className="h-4 w-4" />Analyze with AI</>
                 )}
               </button>
+              {!selectedResource && (
+                <p className="text-xs text-gray-500 text-center">Select a resource above to analyze</p>
+              )}
               {analyzing && analyzeStatus && (
-                <p className="text-xs text-gray-400 mt-1 text-center">{analyzeStatus}</p>
+                <p className="text-xs text-gray-400 text-center">{analyzeStatus}</p>
               )}
             </div>
           </div>
         </div>
 
-      {/* Summary Cards */}
+        {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-gray-800 rounded-lg p-4">
           <div className="flex items-center justify-between">
@@ -256,7 +547,7 @@ const DashboardPage: React.FC = () => {
 
       {/* Charts */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Log Level Distribution */}
+        {/* Log Level Distribution - Donut chart with legend */}
         <div className="bg-gray-800 rounded-lg p-4">
           <h2 className="text-lg font-semibold text-white mb-4">Log Level Distribution</h2>
           {levelChartData.length > 0 ? (
@@ -265,18 +556,26 @@ const DashboardPage: React.FC = () => {
                 <Pie
                   data={levelChartData}
                   cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={(entry) => `${entry.level}: ${entry.count}`}
-                  outerRadius={80}
-                  fill="#8884d8"
+                  cy="45%"
+                  innerRadius={55}
+                  outerRadius={95}
                   dataKey="count"
+                  nameKey="level"
+                  labelLine={false}
+                  label={renderPieLabel}
+                  paddingAngle={2}
                 >
-                  {levelChartData.map((_, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                  {levelChartData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.fill} stroke="transparent" />
                   ))}
                 </Pie>
-                <Tooltip />
+                <Tooltip content={<CustomPieTooltip />} />
+                <Legend
+                  formatter={(value) => <span style={{ color: LEVEL_COLORS[value] ?? '#6B7280', fontSize: 12 }}>{value}</span>}
+                  iconType="circle"
+                  iconSize={8}
+                  wrapperStyle={{ paddingTop: 8 }}
+                />
               </RechartsPieChart>
             </ResponsiveContainer>
           ) : (
@@ -284,20 +583,39 @@ const DashboardPage: React.FC = () => {
           )}
         </div>
 
-        {/* Resource Distribution */}
+        {/* Log Entries per Resource - horizontal or vertical bar with angled labels */}
         <div className="bg-gray-800 rounded-lg p-4">
           <h2 className="text-lg font-semibold text-white mb-4">Log Entries per Resource</h2>
-          {resourceData.length > 0 && resourceData.some(r => r.count > 0) ? (
+          {resourceChartData.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={resourceData.filter(r => r.count > 0)}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                <XAxis dataKey="name" stroke="#9CA3AF" />
-                <YAxis stroke="#9CA3AF" />
-                <Tooltip
-                  contentStyle={{ backgroundColor: '#1F2937', border: '1px solid #374151' }}
+              <BarChart
+                data={resourceChartData}
+                margin={{ top: 8, right: 16, left: 0, bottom: resourceChartData.length > 4 ? 60 : 20 }}
+                barCategoryGap="30%"
+              >
+                <defs>
+                  <linearGradient id="barGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#60A5FA" stopOpacity={1} />
+                    <stop offset="100%" stopColor="#2563EB" stopOpacity={0.9} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
+                <XAxis
+                  dataKey="name"
+                  stroke="#9CA3AF"
+                  tick={{ fill: '#9CA3AF', fontSize: 11 }}
+                  angle={resourceChartData.length > 4 ? -35 : 0}
+                  textAnchor={resourceChartData.length > 4 ? 'end' : 'middle'}
+                  interval={0}
                 />
-                <Legend />
-                <Bar dataKey="count" fill="#3B82F6" />
+                <YAxis
+                  stroke="#9CA3AF"
+                  tick={{ fill: '#9CA3AF', fontSize: 11 }}
+                  allowDecimals={false}
+                  width={40}
+                />
+                <Tooltip content={<CustomBarTooltip />} cursor={{ fill: 'rgba(255,255,255,0.05)' }} />
+                <Bar dataKey="count" fill="url(#barGradient)" radius={[4, 4, 0, 0]} name="Entries" />
               </BarChart>
             </ResponsiveContainer>
           ) : (
@@ -455,6 +773,7 @@ const DashboardPage: React.FC = () => {
           </div>
         </div>
       )}
+      </main>
     </div>
   );
 };

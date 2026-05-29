@@ -91,6 +91,21 @@ class K8sPodInfo(BaseModel):
     created: Optional[str]
 
 
+class LogSessionResponse(BaseModel):
+    id: int
+    name: str
+    source_type: str
+    resource_id: Optional[int]
+    analysis_id: Optional[int]
+    entry_count: int
+    severity: Optional[str]
+    created_at: datetime
+    analysis: Optional['LogAnalysisResponse'] = None
+
+    class Config:
+        from_attributes = True
+
+
 class ClusterHealthResponse(BaseModel):
     status: str
     namespaces: int

@@ -63,3 +63,15 @@ export interface AnalysisResult {
   severity: string;
   confidence_score: number;
 }
+
+export interface LogSession {
+  id: number;
+  name: string;
+  source_type: 'pod' | 'file';
+  resource_id?: number;
+  analysis_id?: number;
+  entry_count: number;
+  severity?: string;
+  created_at: string;
+  analysis?: LogAnalysis;
+}

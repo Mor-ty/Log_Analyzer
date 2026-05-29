@@ -54,3 +54,16 @@ class LogAnalysis(Base):
     findings = Column(JSON, default=dict)  # JSON field for structured data
     suggestions = Column(JSON, default=dict)  # JSON field for structured data
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class LogSession(Base):
+    __tablename__ = "log_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)          # display name (pod or filename)
+    source_type = Column(String, default="file")   # "pod" or "file"
+    resource_id = Column(Integer, ForeignKey("k8s_resources.id"), nullable=True)
+    analysis_id = Column(Integer, ForeignKey("log_analyses.id"), nullable=True)
+    entry_count = Column(Integer, default=0)
+    severity = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
