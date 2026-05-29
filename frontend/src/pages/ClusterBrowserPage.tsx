@@ -27,7 +27,7 @@ const ClusterBrowserPage: React.FC = () => {
   // Hold saved namespace in a ref so loadClusterData can use it after async fetch
   const savedNamespaceRef = React.useRef<string | null>(null);
 
-  // Restore only namespace + last viewed logs on mount
+  // On mount: restore session
   useEffect(() => {
     const saved = sessionStorage.getItem(SESSION_KEY);
     if (saved) {

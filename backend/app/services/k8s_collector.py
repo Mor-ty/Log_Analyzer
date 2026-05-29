@@ -27,7 +27,7 @@ class K8sLogCollector:
             return False
     
     def _run_kubectl_command(self, command: List[str]) -> str:
-        """Run a kubectl command and return output."""
+        """Run a kubectl command."""
         try:
             result = subprocess.run(command, capture_output=True, text=True, timeout=30)
             if result.returncode != 0:
