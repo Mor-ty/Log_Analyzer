@@ -1,69 +1,94 @@
 import asyncio
+import subprocess
+import json
 from typing import List, Optional
-from kubernetes import client, config
-from kubernetes.client.rest import ApiException
 from app.core.config import settings
 from app.models.log import K8sResource, LogEntry
 from sqlalchemy.orm import Session
 
 
 class K8sLogCollector:
-    """Collect logs from Kubernetes cluster."""
+    """Collect logs from Kubernetes cluster using kubectl commands."""
     
     def __init__(self):
-        self.k8s_loaded = False
-        self.v1 = None
-        self._load_k8s_config()
+        self.k8s_available = self._check_kubectl_available()
+        if self.k8s_available:
+            print("kubectl command available for Kubernetes operations")
+        else:
+            print("kubectl command not available, Kubernetes features disabled")
     
-    def _load_k8s_config(self):
-        """Load Kubernetes configuration."""
+    def _check_kubectl_available(self) -> bool:
+        """Check if kubectl command is available."""
         try:
-            if settings.KUBECONFIG:
-                config.load_kube_config(config_file=settings.KUBECONFIG)
-            else:
-                # Try in-cluster config or default location
-                try:
-                    config.load_incluster_config()
-                except:
-                    config.load_kube_config()
-            
-            self.v1 = client.CoreV1Api()
-            self.k8s_loaded = True
-            print("Kubernetes configuration loaded successfully")
+            result = subprocess.run(['kubectl', 'version', '--client'], 
+                                  capture_output=True, text=True, timeout=5)
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+    
+    def _run_kubectl_command(self, command: List[str]) -> str:
+        """Run a kubectl command and return output."""
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                print(f"kubectl command failed: {result.stderr}")
+                return ""
+            return result.stdout
+        except subprocess.TimeoutExpired:
+            print("kubectl command timed out")
+            return ""
         except Exception as e:
-            print(f"Failed to load Kubernetes config: {e}")
-            self.k8s_loaded = False
+            print(f"Error running kubectl command: {e}")
+            return ""
     
     def get_namespaces(self) -> List[str]:
-        """Get all namespaces."""
-        if not self.k8s_loaded:
+        """Get all namespaces using kubectl."""
+        if not self.k8s_available:
             return []
         
         try:
-            namespaces = self.v1.list_namespace()
-            return [ns.metadata.name for ns in namespaces.items]
-        except ApiException as e:
+            output = self._run_kubectl_command(['kubectl', 'get', 'namespaces', '-o', 'jsonpath={.items[*].metadata.name}'])
+            if output:
+                namespaces = output.split()
+                return namespaces
+            return []
+        except Exception as e:
             print(f"Error fetching namespaces: {e}")
             return []
     
     def get_pods(self, namespace: str = "default") -> List[dict]:
-        """Get all pods in a namespace."""
-        if not self.k8s_loaded:
+        """Get all pods in a namespace using kubectl."""
+        if not self.k8s_available:
             return []
         
         try:
-            pods = self.v1.list_namespaced_pod(namespace)
-            return [
-                {
-                    'name': pod.metadata.name,
-                    'namespace': pod.metadata.namespace,
-                    'status': pod.status.phase,
-                    'containers': [c.name for c in pod.spec.containers],
-                    'created': pod.metadata.creation_timestamp.isoformat() if pod.metadata.creation_timestamp else None
-                }
-                for pod in pods.items
-            ]
-        except ApiException as e:
+            output = self._run_kubectl_command([
+                'kubectl', 'get', 'pods', '-n', namespace,
+                '-o', 'json'
+            ])
+            
+            if not output:
+                return []
+            
+            data = json.loads(output)
+            pods = []
+            
+            for item in data.get('items', []):
+                pod_name = item.get('metadata', {}).get('name', '')
+                status = item.get('status', {}).get('phase', 'Unknown')
+                containers = [c.get('name', '') for c in item.get('spec', {}).get('containers', [])]
+                created = item.get('metadata', {}).get('creationTimestamp', None)
+                
+                pods.append({
+                    'name': pod_name,
+                    'namespace': namespace,
+                    'status': status,
+                    'containers': containers,
+                    'created': created
+                })
+            
+            return pods
+        except Exception as e:
             print(f"Error fetching pods in {namespace}: {e}")
             return []
     
@@ -74,26 +99,25 @@ class K8sLogCollector:
         container: Optional[str] = None,
         tail_lines: int = 100
     ) -> str:
-        """Get logs from a specific pod."""
-        if not self.k8s_loaded:
+        """Get logs from a specific pod using kubectl."""
+        if not self.k8s_available:
             return ""
         
         try:
-            logs = self.v1.read_namespaced_pod_log(
-                name=pod_name,
-                namespace=namespace,
-                container=container,
-                tail_lines=tail_lines
-            )
+            command = ['kubectl', 'logs', pod_name, '-n', namespace, '--tail', str(tail_lines)]
+            if container:
+                command.extend(['-c', container])
+            
+            logs = self._run_kubectl_command(command)
             return logs
-        except ApiException as e:
+        except Exception as e:
             print(f"Error fetching logs for {pod_name}: {e}")
             return ""
     
     def collect_all_logs(self, db: Session, namespaces: Optional[List[str]] = None):
-        """Collect logs from all pods in specified namespaces."""
-        if not self.k8s_loaded:
-            print("Kubernetes not configured, skipping log collection")
+        """Collect logs from all pods in specified namespaces using kubectl."""
+        if not self.k8s_available:
+            print("kubectl not available, skipping log collection")
             return
         
         target_namespaces = namespaces or self.get_namespaces()
@@ -126,14 +150,12 @@ class K8sLogCollector:
                     logs = self.get_pod_logs(namespace, pod_name, container)
                     
                     if logs:
-                        # Store logs (implementation depends on your parsing logic)
-                        # This is a simplified version
                         print(f"Collected {len(logs)} bytes from {namespace}/{pod_name}/{container}")
     
     def get_cluster_health(self) -> dict:
-        """Get overall cluster health summary."""
-        if not self.k8s_loaded:
-            return {"status": "unavailable", "error": "Kubernetes not configured"}
+        """Get overall cluster health summary using kubectl."""
+        if not self.k8s_available:
+            return {"status": "unavailable", "error": "kubectl not available"}
         
         try:
             namespaces = self.get_namespaces()

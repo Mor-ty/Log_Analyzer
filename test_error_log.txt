@@ -1,0 +1,19 @@
+2024-01-15 10:23:45 ERROR  Failed to connect to database server
+2024-01-15 10:23:46 ERROR  Database connection timeout after 30 seconds
+2024-01-15 10:23:47 ERROR  Connection refused by database server
+2024-01-15 10:23:48 WARNING  Retrying database connection...
+2024-01-15 10:23:49 ERROR  Database connection failed again
+2024-01-15 10:23:50 ERROR  Maximum retry attempts exceeded
+2024-01-15 10:23:51 ERROR  Application startup failed due to database connectivity
+2024-01-15 10:23:52 ERROR  Cannot initialize application components
+2024-01-15 10:23:53 ERROR  Service unavailable - database connection required
+2024-01-15 10:23:54 WARNING  Using degraded mode - database features disabled
+2024-01-15 10:23:55 ERROR  Failed to load configuration from database
+2024-01-15 10:23:56 ERROR  Configuration file not found in database
+2024-01-15 10:23:57 ERROR  Missing required configuration parameters
+2024-01-15 10:23:58 ERROR  Application cannot start without valid configuration
+2024-01-15 10:23:59 WARNING  Attempting to continue with default configuration
+2024-01-15 10:24:00 ERROR  Default configuration validation failed
+2024-01-15 10:24:01 ERROR  Invalid configuration - application cannot proceed
+2024-01-15 10:24:02 ERROR  Application initialization failed
+2024-01-15 10:24:03 ERROR  Service startup aborted

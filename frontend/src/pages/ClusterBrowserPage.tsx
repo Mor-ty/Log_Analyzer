@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Server, Activity, AlertCircle, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Server, Activity, AlertCircle, Loader2, ChevronDown, ChevronRight, CheckCircle } from 'lucide-react';
 import { k8sAPI, logAPI, parseAnalysis } from '../services/api';
 import { K8sPodInfo, ClusterHealth, AnalysisResult } from '../types';
 
 const ClusterBrowserPage: React.FC = () => {
+  const navigate = useNavigate();
   const [health, setHealth] = useState<ClusterHealth | null>(null);
   const [namespaces, setNamespaces] = useState<string[]>([]);
   const [selectedNamespace, setSelectedNamespace] = useState<string>('');
@@ -15,7 +17,9 @@ const ClusterBrowserPage: React.FC = () => {
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [expandedPods, setExpandedPods] = useState<Set<string>>(new Set());
+  const [currentResourceId, setCurrentResourceId] = useState<number | null>(null);
 
   useEffect(() => {
     loadClusterData();
@@ -76,13 +80,43 @@ const ClusterBrowserPage: React.FC = () => {
   };
 
   const analyzeLogs = async () => {
-    if (!selectedPod || logs.length === 0) return;
+    if (!selectedPod) return;
 
     setAnalyzing(true);
     setError(null);
+    setSuccessMessage(null);
+    
     try {
+      // Load logs first if not already loaded
+      if (logs.length === 0) {
+        const logsData = await k8sAPI.getPodLogs(selectedPod.namespace, selectedPod.name);
+        setLogs(logsData.logs);
+        
+        if (logsData.logs.length === 0) {
+          setError('No logs available for this pod');
+          setAnalyzing(false);
+          return;
+        }
+      }
+      
+      // Perform analysis
       const analysisData = await logAPI.analyzeLogs(undefined, selectedPod.name, 'general');
-      setAnalysis(parseAnalysis(analysisData));
+      const parsedAnalysis = parseAnalysis(analysisData);
+      setAnalysis(parsedAnalysis);
+      
+      // Show success message and redirect to dashboard
+      setSuccessMessage(`Logs from ${selectedPod.name} analyzed successfully!`);
+      
+      setTimeout(() => {
+        navigate('/dashboard', { 
+          state: { 
+            analysis: parsedAnalysis,
+            sourcePod: selectedPod.name,
+            sourceNamespace: selectedPod.namespace
+          } 
+        });
+      }, 1500);
+      
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Analysis failed');
     } finally {
@@ -134,6 +168,14 @@ const ClusterBrowserPage: React.FC = () => {
         <div className="bg-red-900/50 border border-red-700 rounded-lg p-4 flex items-start">
           <AlertCircle className="h-5 w-5 text-red-400 mr-3 mt-0.5" />
           <p className="text-red-300">{error}</p>
+        </div>
+      )}
+
+      {/* Success Message */}
+      {successMessage && (
+        <div className="bg-green-900/50 border border-green-700 rounded-lg p-4 flex items-start">
+          <CheckCircle className="h-5 w-5 text-green-400 mr-3 mt-0.5" />
+          <p className="text-green-300">{successMessage}</p>
         </div>
       )}
 

@@ -22,8 +22,8 @@ class LogParser:
     
     def __init__(self):
         self.timestamp_pattern = re.compile(self.PATTERNS[0])
-        self.level_pattern = re.compile(self.PATTERNS[1])
-        self.pod_pattern = re.compile(self.PATTERNS[2])
+        self.level_pattern = re.compile(self.PATTERNS[2])
+        self.pod_pattern = re.compile(self.PATTERNS[3])
     
     def parse_line(self, line: str) -> dict:
         """Parse a single log line and extract structured information."""

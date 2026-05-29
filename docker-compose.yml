@@ -34,10 +34,13 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: k8s-log-analytics-backend
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql://loguser:logpass@postgres:5432/loganalytics
       REDIS_URL: redis://redis:6379/0
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-1.5-flash}
       KUBECONFIG: /kubeconfig/config
     volumes:
       # Mount kubeconfig for Kubernetes access (optional)

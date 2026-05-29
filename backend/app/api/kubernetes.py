@@ -95,6 +95,8 @@ def get_pod_logs(
         return {
             "logs": parsed_logs,
             "resource_id": resource.id,
+            "pod_name": pod_name,
+            "namespace": namespace,
             "entries_count": entries_created,
             "raw_logs": logs
         }

@@ -58,6 +58,7 @@ def debug_config():
     return {
         "gemini_configured": bool(settings.GEMINI_API_KEY),
         "gemini_key_length": len(settings.GEMINI_API_KEY) if settings.GEMINI_API_KEY else 0,
+        "gemini_model": settings.GEMINI_MODEL,
         "database_configured": bool(settings.DATABASE_URL),
         "redis_configured": bool(settings.REDIS_URL)
     }
