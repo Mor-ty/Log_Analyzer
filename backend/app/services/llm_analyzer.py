@@ -1,6 +1,6 @@
 import json
 from typing import List, Dict, Optional, Set
-import google.generativeai as genai
+from openai import AzureOpenAI
 from collections import Counter
 from datetime import datetime
 import re
@@ -12,14 +12,17 @@ class LLMLogAnalyzer:
     
     def __init__(self):
         self.client = None
-        self.model = settings.GEMINI_MODEL
-        if settings.GEMINI_API_KEY:
+        self.deployment = settings.AZURE_OPENAI_DEPLOYMENT
+        if settings.AZURE_OPENAI_ENDPOINT and settings.AZURE_OPENAI_API_KEY:
             try:
-                genai.configure(api_key=settings.GEMINI_API_KEY)
-                self.client = genai.GenerativeModel(self.model)
-                print(f"Gemini client initialized with model: {self.model}")
+                self.client = AzureOpenAI(
+                    azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
+                    api_key=settings.AZURE_OPENAI_API_KEY,
+                    api_version=settings.AZURE_OPENAI_API_VERSION,
+                )
+                print(f"Azure OpenAI client initialized — deployment: {self.deployment}, api_version: {settings.AZURE_OPENAI_API_VERSION}")
             except Exception as e:
-                print(f"Failed to initialize Gemini client: {e}")
+                print(f"Failed to initialize Azure OpenAI client: {e}")
     
     def analyze_logs(
         self, 
@@ -36,30 +39,29 @@ class LLMLogAnalyzer:
         # Try LLM first; fall back to pattern-aware rule-based analysis only on failure
         if self.client:
             try:
-                prompt = self._build_smart_prompt(condensed_context, analysis_type)
-                print(f"Attempting Gemini analysis ({self.model}), prompt length: {len(prompt)} chars...")
-                response = self.client.generate_content(
-                    prompt,
-                    generation_config=genai.types.GenerationConfig(
-                        temperature=0.2,
-                        max_output_tokens=8192,  # Enough for full structured analysis
-                    )
+                messages = self._build_smart_prompt(condensed_context, analysis_type)
+                print(f"Attempting Azure OpenAI analysis (deployment={self.deployment}), messages built...")
+                response = self.client.chat.completions.create(
+                    model=self.deployment,
+                    messages=messages,
+                    max_completion_tokens=16000,
+                    reasoning_effort="medium",
                 )
-
-                print(f"Gemini response received ({len(response.text)} chars), parsing...")
-                result = self._parse_response(response.text)
+                response_text = response.choices[0].message.content or ""
+                print(f"Azure OpenAI response received ({len(response_text)} chars), parsing...")
+                result = self._parse_response(response_text)
                 confidence = result.get("confidence_score", 0)
                 print(f"Parsed result confidence: {confidence}")
                 # Accept LLM result whenever it returns a valid structured response
                 # (confidence >= 0.4 means the LLM produced something meaningful)
                 if confidence >= 0.4:
-                    print(f"Using Gemini analysis (confidence={confidence})")
+                    print(f"Using Azure OpenAI analysis (confidence={confidence})")
                     return result
                 else:
                     print(f"Gemini returned very low confidence ({confidence}), using pattern-aware fallback")
                     return self._enhanced_fallback_analysis(log_entries, condensed_context)
             except Exception as e:
-                print(f"Gemini analysis failed — {type(e).__name__}: {e}")
+                print(f"Azure OpenAI analysis failed — {type(e).__name__}: {e}")
                 print("Falling back to pattern-aware rule-based analysis")
                 return self._enhanced_fallback_analysis(log_entries, condensed_context)
         else:
@@ -68,37 +70,27 @@ class LLMLogAnalyzer:
     
     def _prepare_condensed_context(self, log_entries: List[Dict]) -> str:
         """
-        Smart context: group identical patterns, send once with count + time range.
-        Cuts tokens by ~70% vs raw dump while preserving the specificity LLM needs.
-        Strategy:
-          - Errors: group by normalized pattern → first full message (220 chars) + [Nx] + time span
-          - Warnings: same, top 8 unique patterns
-          - Stack traces: deduplicated by first 80 chars, top 3
-          - Info: 3-line sample only for baseline context
+        Token-efficient context: group all log levels by normalised pattern with
+        count + time range so the LLM gets signal-dense input without redundant repetition.
         """
         critical_errors = [e for e in log_entries if str(e.get('level')) in ['ERROR', 'CRITICAL', 'LogLevel.ERROR', 'LogLevel.CRITICAL']]
         warnings = [e for e in log_entries if str(e.get('level')) in ['WARNING', 'LogLevel.WARNING']]
         info_entries = [e for e in log_entries if str(e.get('level')) in ['INFO', 'LogLevel.INFO']]
+        debug_entries = [e for e in log_entries if str(e.get('level')) in ['DEBUG', 'LogLevel.DEBUG']]
 
         context_parts = []
 
         # --- Summary header ---
-        context_parts.append("=== INCIDENT SUMMARY ===")
-        context_parts.append(f"Total log entries: {len(log_entries)}  |  Errors: {len(critical_errors)}  |  Warnings: {len(warnings)}  |  Info: {len(info_entries)}")
+        context_parts.append("=== LOG SUMMARY ===")
+        context_parts.append(
+            f"Entries: {len(log_entries)} total | "
+            f"ERROR/CRITICAL: {len(critical_errors)} | WARNING: {len(warnings)} | "
+            f"INFO: {len(info_entries)} | DEBUG: {len(debug_entries)}"
+        )
         if log_entries:
-            context_parts.append(f"Time range: {log_entries[0].get('timestamp', 'N/A')}  →  {log_entries[-1].get('timestamp', 'N/A')}")
-
-        # --- Key K8s/service signals found anywhere in logs ---
-        all_messages = " ".join(e.get('message', '') for e in log_entries)
-        signal_keywords = [
-            'OOMKilled', 'CrashLoopBackOff', 'Evicted', 'BackOff', 'Pending',
-            'OutOfMemoryError', 'heap space', 'connection refused', 'timeout',
-            'certificate', 'ImagePullBackOff', 'FailedScheduling', 'exit code 137',
-            'circuit breaker', 'upstream', '504', '503', 'health check failed',
-        ]
-        detected = [kw for kw in signal_keywords if kw.lower() in all_messages.lower()]
-        if detected:
-            context_parts.append(f"Detected signals: {', '.join(detected)}")
+            context_parts.append(
+                f"Time range: {log_entries[0].get('timestamp', 'N/A')} → {log_entries[-1].get('timestamp', 'N/A')}"
+            )
 
         # --- Unique error patterns grouped by normalized message ---
         error_groups: Dict[str, list] = {}
@@ -109,18 +101,20 @@ class LLMLogAnalyzer:
             error_groups[key].append(e)
 
         sorted_errors = sorted(error_groups.items(), key=lambda x: len(x[1]), reverse=True)
-        context_parts.append(f"\n=== UNIQUE ERROR PATTERNS ({len(sorted_errors)} distinct, {len(critical_errors)} total occurrences) ===")
-        for _, group in sorted_errors[:15]:
-            count = len(group)
-            first = group[0]
-            first_ts = first.get('timestamp', '')
-            last_ts = group[-1].get('timestamp', '') if count > 1 else ''
-            svc = first.get('service', first.get('source', ''))
-            msg = first.get('message', '')[:220]  # enough to extract names + error type
-
-            time_str = f"{first_ts} → {last_ts}" if last_ts and last_ts != first_ts else first_ts
-            svc_str = f" [{svc}]" if svc else ""
-            context_parts.append(f"  [{count}x]{svc_str} {time_str}\n    {msg}")
+        if sorted_errors:
+            context_parts.append(
+                f"\n=== UNIQUE ERROR PATTERNS ({len(sorted_errors)} distinct, {len(critical_errors)} total) ==="
+            )
+            for _, group in sorted_errors[:15]:
+                count = len(group)
+                first = group[0]
+                first_ts = first.get('timestamp', '')
+                last_ts = group[-1].get('timestamp', '') if count > 1 else ''
+                svc = first.get('service', first.get('source', ''))
+                msg = first.get('message', '')[:220]
+                time_str = f"{first_ts} → {last_ts}" if last_ts and last_ts != first_ts else first_ts
+                svc_str = f" [{svc}]" if svc else ""
+                context_parts.append(f"  [{count}x]{svc_str} {time_str}\n    {msg}")
 
         # --- Unique warning patterns (top 8) ---
         warning_groups: Dict[str, list] = {}
@@ -142,6 +136,44 @@ class LLMLogAnalyzer:
                 svc_str = f" [{svc}]" if svc else ""
                 context_parts.append(f"  [{count}x]{svc_str} {ts}: {msg}")
 
+        # --- INFO patterns grouped by pattern (not just a sample) ---
+        info_groups: Dict[str, list] = {}
+        for e in info_entries:
+            key = self._normalize_message(e.get('message', ''))[:100]
+            if key not in info_groups:
+                info_groups[key] = []
+            info_groups[key].append(e)
+
+        sorted_info = sorted(info_groups.items(), key=lambda x: len(x[1]), reverse=True)
+        if sorted_info:
+            context_parts.append(
+                f"\n=== INFO PATTERNS ({len(sorted_info)} distinct, {len(info_entries)} total) ==="
+            )
+            for _, group in sorted_info[:12]:
+                count = len(group)
+                first = group[0]
+                ts = first.get('timestamp', '')
+                msg = first.get('message', '')[:200]
+                context_parts.append(f"  [{count}x] {ts}: {msg}")
+
+        # --- DEBUG sample (top 3 unique patterns if present) ---
+        if debug_entries:
+            debug_groups: Dict[str, list] = {}
+            for e in debug_entries:
+                key = self._normalize_message(e.get('message', ''))[:100]
+                if key not in debug_groups:
+                    debug_groups[key] = []
+                debug_groups[key].append(e)
+            sorted_debug = sorted(debug_groups.items(), key=lambda x: len(x[1]), reverse=True)
+            context_parts.append(
+                f"\n=== DEBUG SAMPLE ({len(debug_entries)} total, {len(sorted_debug)} distinct) ==="
+            )
+            for _, group in sorted_debug[:3]:
+                count = len(group)
+                first = group[0]
+                msg = first.get('message', '')[:120]
+                context_parts.append(f"  [{count}x] {msg}")
+
         # --- Stack trace signatures (deduplicated by first 80 chars) ---
         stack_traces = self._extract_stack_traces(log_entries)
         if stack_traces:
@@ -149,12 +181,6 @@ class LLMLogAnalyzer:
             context_parts.append(f"\n=== STACK TRACES ({len(unique_traces)} unique) ===")
             for trace in unique_traces[:3]:
                 context_parts.append(f"  {trace[:350]}")
-
-        # --- 3 INFO lines as baseline context ---
-        if info_entries:
-            context_parts.append(f"\n=== INFO SAMPLE (3 of {len(info_entries)}) ===")
-            for e in info_entries[:3]:
-                context_parts.append(f"  [{e.get('timestamp', '')}] {e.get('message', '')[:120]}")
 
         return "\n".join(context_parts)
     
@@ -191,7 +217,67 @@ class LLMLogAnalyzer:
         normalized = re.sub(r'\b[a-f0-9]{8,}\b', '', normalized)  # Remove hex ids
         normalized = re.sub(r'\b\d+\b', '', normalized)  # Remove numbers
         return normalized.strip().lower()[:100]  # Take first 100 chars
-    
+
+    def _detect_log_source(self, log_entries: List[Dict]) -> Dict[str, bool]:
+        """Detect what types of logs are present: K8s, kubelet, Apache, Nginx, Java, Python."""
+        all_text = " ".join(
+            e.get('message', '') + " " + str(e.get('source', '')) + " " + str(e.get('service', ''))
+            for e in log_entries
+        )
+        msg_lower = all_text.lower()
+
+        has_k8s_paths  = bool(re.search(r'/var/log/pods/|namespace[/\s:]+\w', all_text))
+        has_k8s_events = bool(re.search(
+            r'crashloopbackoff|oomkilled|imagepullbackoff|failedscheduling|kubeconfig|k8s\.io',
+            msg_lower
+        ))
+        has_kubelet = bool(re.search(r'resolving symlinks|kubelet|/var/log/pods/', all_text))
+        has_apache  = bool(re.search(r'ah\d{5}|apache|httpd|mod_|mpm_prefork|mpm_event|servername', msg_lower))
+        has_nginx   = bool(re.search(r'\bnginx\b|worker_process|accept\(\) failed|proxy_pass', msg_lower))
+        has_java    = bool(re.search(
+            r'at\s+[\w$.]+\([\w$.]+\.java:\d+\)|java\.lang\.|heap space|outofmemoryerror', msg_lower
+        ))
+        has_python  = bool(re.search(
+            r'traceback \(most recent call|file ".+\.py", line|importerror|modulenotfounderror', msg_lower
+        ))
+        has_k8s = has_k8s_paths or has_k8s_events or has_kubelet
+
+        return {
+            'k8s': has_k8s,
+            'k8s_paths': has_k8s_paths,
+            'kubelet': has_kubelet,
+            'apache': has_apache,
+            'nginx': has_nginx,
+            'java': has_java,
+            'python': has_python,
+        }
+
+    def _extract_k8s_entities_from_paths(self, log_entries: List[Dict]) -> Dict[str, Set[str]]:
+        """
+        Extract namespace, pod name, and container name from /var/log/pods/ paths in log messages.
+        Path format: /var/log/pods/NAMESPACE_PODNAME_UUID/CONTAINER/N.log
+        """
+        namespaces: Set[str] = set()
+        pods: Set[str] = set()
+        containers: Set[str] = set()
+
+        all_text = " ".join(e.get('message', '') for e in log_entries)
+        path_pattern = re.compile(
+            r'/var/log/pods/'
+            r'([a-z0-9][a-z0-9-]*)'                                                    # namespace
+            r'_([a-z0-9][a-z0-9.-]*[a-z0-9])'                                         # pod name
+            r'_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'       # UUID
+            r'/([a-z0-9][a-z0-9-]*)'                                                   # container
+            r'/',
+            re.IGNORECASE
+        )
+        for m in path_pattern.finditer(all_text):
+            namespaces.add(m.group(1).lower())
+            pods.add(m.group(2).lower())
+            containers.add(m.group(4).lower())
+
+        return {'namespaces': namespaces, 'pods': pods, 'containers': containers}
+
     def _detect_anomalies(self, log_entries: List[Dict]) -> List[str]:
         """Detect unusual patterns and anomalies."""
         anomalies = []
@@ -221,11 +307,7 @@ class LLMLogAnalyzer:
         return anomalies
     
     def _enhanced_fallback_analysis(self, log_entries: List[Dict], condensed_context: str) -> Dict:
-        """
-        Pattern-aware fallback analysis. Extracts real pod/service/deployment names from the
-        log messages and generates specific kubectl commands + structured IMMEDIATE/LONG-TERM output.
-        Used when LLM is unavailable or returns low confidence.
-        """
+        """Rule-based fallback used only when the LLM is unavailable or returns low confidence."""
         if not log_entries:
             return {
                 "anomalies": ["No log entries found"],
@@ -237,292 +319,194 @@ class LLMLogAnalyzer:
             }
 
         critical_errors = [e for e in log_entries if str(e.get('level')) in ['ERROR', 'CRITICAL', 'LogLevel.ERROR', 'LogLevel.CRITICAL']]
-        warnings = [e for e in log_entries if str(e.get('level')) in ['WARNING', 'LogLevel.WARNING']]
-        all_messages = " ".join(e.get('message', '') for e in log_entries)
-        error_messages = [e.get('message', '') for e in critical_errors]
+        warnings        = [e for e in log_entries if str(e.get('level')) in ['WARNING', 'LogLevel.WARNING']]
+        all_messages    = " ".join(e.get('message', '') for e in log_entries)
+        msg_lower       = all_messages.lower()
 
-        # ── Entity extraction from actual log content ──────────────────────────
-        # Extract k8s-style names (e.g. api-gateway-new-2, order-svc-pod-3)
-        pod_candidates = re.findall(r'\b([a-z][a-z0-9]*(?:-[a-z0-9]+){2,})\b', all_messages)
-        pod_names = list(dict.fromkeys(pod_candidates))[:5]  # deduplicated, top 5
+        # Extract real pod/namespace names from log text
+        pod_candidates  = re.findall(r'\b([a-z][a-z0-9]*(?:-[a-z0-9]+){2,})\b', all_messages)
+        pod_names       = list(dict.fromkeys(pod_candidates))[:5]
+        ns_matches      = re.findall(r'namespace[/\s:]+([a-z][a-z0-9-]+)', all_messages, re.IGNORECASE)
+        # Also parse /var/log/pods/NAMESPACE_PODNAME_UUID/CONTAINER/ paths
+        path_ns = re.findall(r'/var/log/pods/([a-z0-9][a-z0-9-]*)_[a-z0-9]', all_messages, re.IGNORECASE)
+        path_pods = re.findall(r'/var/log/pods/[a-z0-9][a-z0-9-]*_([a-z0-9][a-z0-9.-]*[a-z0-9])_[0-9a-f-]{36}', all_messages, re.IGNORECASE)
 
-        # Extract deployment names from common log phrases
-        deploy_matches = re.findall(r'deployment[/\s]+([a-z][a-z0-9-]+)', all_messages, re.IGNORECASE)
-        deployment_name = deploy_matches[0] if deploy_matches else (pod_names[0].rsplit('-', 2)[0] if pod_names else '<deployment-name>')
+        all_pods = list(dict.fromkeys((path_pods or []) + pod_names))
+        all_ns   = list(dict.fromkeys((path_ns or []) + (ns_matches or [])))
+        primary_pod = all_pods[0] if all_pods else None
+        namespace   = all_ns[0] if all_ns else None
+        ns_str  = namespace or "<namespace>"
+        pod_str = primary_pod or "<pod-name>"
 
-        # Infer namespace hints
-        ns_matches = re.findall(r'namespace[/\s:]+([a-z][a-z0-9-]+)', all_messages, re.IGNORECASE)
-        namespace = ns_matches[0] if ns_matches else '<namespace>'
+        deploy_matches  = re.findall(r'deployment[/\s]+([a-z][a-z0-9-]+)', all_messages, re.IGNORECASE)
+        deployment_name = deploy_matches[0] if deploy_matches else (
+            primary_pod.rsplit('-', 2)[0] if primary_pod and primary_pod.count('-') >= 2 else pod_str
+        )
 
-        primary_pod = pod_names[0] if pod_names else '<pod-name>'
+        is_k8s       = bool(re.search(r'/var/log/pods/|crashloopbackoff|oomkilled|imagepullbackoff|failedscheduling', msg_lower))
+        is_crashloop = 'crashloopbackoff' in msg_lower
+        is_oom       = 'oomkilled' in msg_lower or 'outofmemoryerror' in msg_lower or 'heap space' in msg_lower or 'exit code 137' in msg_lower
+        is_image     = 'imagepullbackoff' in msg_lower or 'errimagepull' in msg_lower
+        is_schedule  = 'failedscheduling' in msg_lower or 'insufficient' in msg_lower
+        is_timeout   = 'timeout' in msg_lower or '504' in msg_lower or 'connection refused' in msg_lower
 
-        # ── K8s failure pattern detection ─────────────────────────────────────
-        msg_lower = all_messages.lower()
+        anomalies: list = []
+        root_causes: list = []
+        resolutions: list = []
+        config_issues: list = []
+        performance_insights: list = []
 
-        is_crashloop       = 'crashloopbackoff' in msg_lower or 'crash loop' in msg_lower
-        is_oom             = 'oomkilled' in msg_lower or 'outofmemoryerror' in msg_lower or 'heap space' in msg_lower or 'exit code 137' in msg_lower
-        is_missing_env     = 'missing required env' in msg_lower or 'env var' in msg_lower or 'environment variable' in msg_lower
-        is_connection      = 'cannot connect' in msg_lower or 'connection refused' in msg_lower or 'connection failed' in msg_lower
-        is_timeout         = 'timeout' in msg_lower or '504' in msg_lower or 'timed out' in msg_lower
-        is_upstream        = 'upstream' in msg_lower or 'health check failed' in msg_lower or 'backend' in msg_lower
-        is_tls             = 'tls' in msg_lower or 'certificate' in msg_lower or 'ssl' in msg_lower
-        is_config_svc      = 'config-service' in msg_lower or 'configmap' in msg_lower or 'secret' in msg_lower
-        is_image_pull      = 'imagepullbackoff' in msg_lower or 'errimagepull' in msg_lower
-        is_scheduling      = 'failedscheduling' in msg_lower or 'insufficient' in msg_lower
-        is_rollout         = 'rollout' in msg_lower or 'rolling update' in msg_lower
-
-        anomalies = []
-        root_causes = []
-        resolutions = []
-        config_issues = []
-        performance_insights = []
-
-        # ── Per-pattern analysis ───────────────────────────────────────────────
         if is_crashloop:
-            restart_matches = re.findall(r'attempt\s+(\d+)/(\d+)', all_messages)
-            restart_str = f"(reached attempt {restart_matches[-1][0]}/{restart_matches[-1][1]})" if restart_matches else ""
-            anomalies.append(f"CrashLoopBackOff detected on pod {primary_pod} {restart_str} — container exits immediately on startup with exit code 1")
-            if is_missing_env:
-                env_matches = re.findall(r'env[_ ]var[: ]+([A-Z_][A-Z0-9_]+)', all_messages, re.IGNORECASE)
-                env_name = env_matches[0] if env_matches else 'API_GATEWAY_SECRET_KEY'
-                anomalies.append(f"Startup fatal: missing required environment variable '{env_name}' — container cannot initialize")
-                root_causes.append(f"Missing required env var '{env_name}' in the new pod spec — the rolling update introduced a pod template that references a Secret/ConfigMap key not present in the cluster")
-                resolutions.append(f"IMMEDIATE: kubectl describe pod {primary_pod} -n {namespace} — check Events section for exact missing env var and Secret/ConfigMap reference errors")
-                resolutions.append(f"IMMEDIATE: kubectl logs {primary_pod} -n {namespace} --previous — read the startup FATAL lines from the crashed container")
-                resolutions.append(f"IMMEDIATE: kubectl rollout undo deployment/{deployment_name} -n {namespace} — revert to last known-good deployment immediately to restore capacity")
-                resolutions.append(f"IMMEDIATE: kubectl get secret -n {namespace} and kubectl get configmap -n {namespace} — verify the Secret/ConfigMap containing '{env_name}' exists")
-                config_issues.append(f"LONG-TERM: Audit the deployment's envFrom / env[].valueFrom.secretKeyRef blocks — ensure every referenced Secret key exists before a rollout is triggered")
-                config_issues.append(f"LONG-TERM: Add a pre-deploy validation step in CI/CD (e.g. helm lint, kubeval, or conftest) to catch missing Secret references before they reach the cluster")
-            if is_connection:
-                svc_matches = re.findall(r'connect(?:ing)? to ([a-z][a-z0-9.-]+:\d+)', all_messages, re.IGNORECASE)
-                target_svc = svc_matches[0] if svc_matches else 'config-service:8500'
-                anomalies.append(f"Startup fatal: container cannot reach {target_svc} — service discovery or network policy blocking connection")
-                root_causes.append(f"Upstream dependency {target_svc} is unreachable from the new pod — possible network policy, wrong service name, or the target service is down")
-                resolutions.append(f"IMMEDIATE: kubectl get svc -n {namespace} — verify {target_svc.split(':')[0]} service exists and has the correct port")
-                resolutions.append(f"IMMEDIATE: kubectl get endpointslices -l kubernetes.io/service-name={target_svc.split(':')[0]} -n {namespace} — check if service has live endpoints")
-                resolutions.append(f"IMMEDIATE: kubectl debug -it {primary_pod} --image=busybox:1.28 --target={primary_pod.rsplit('-', 1)[0] if '-' in primary_pod else primary_pod} -n {namespace} -- wget -qO- http://{target_svc}/health — test reachability from inside the pod namespace")
-            if is_tls:
-                anomalies.append("Startup fatal: TLS certificate validation failed for upstream service — cert may be self-signed, expired, or wrong CA bundle")
-                root_causes.append("TLS certificate validation failure at startup — the new image version may have stricter TLS validation or the upstream cert has changed/expired")
-                resolutions.append(f"IMMEDIATE: kubectl exec -it {primary_pod} -n {namespace} -- openssl s_client -connect <upstream-host>:443 — test TLS handshake manually")
-                config_issues.append("LONG-TERM: Mount the correct CA bundle as a volume and set SSL_CERT_FILE env var, or configure cert-manager to automate certificate rotation")
-            if is_rollout:
-                resolutions.append(f"IMMEDIATE: kubectl rollout status deployment/{deployment_name} -n {namespace} — check current rollout state")
-                resolutions.append(f"IMMEDIATE: kubectl rollout history deployment/{deployment_name} -n {namespace} — identify the previous stable revision")
-                resolutions.append(f"IMMEDIATE: kubectl rollout undo deployment/{deployment_name} -n {namespace} — rollback to stable revision (Kubernetes will perform a clean rolling replacement)")
-
+            anomalies.append(f"CrashLoopBackOff detected on pod {pod_str} — container crashes on every start")
+            root_causes.append("Application exits immediately at startup — check --previous logs for the exact error")
+            resolutions.append(f"IMMEDIATE: kubectl logs {pod_str} -n {ns_str} --previous -- read crash output from last run")
+            resolutions.append(f"IMMEDIATE: kubectl describe pod {pod_str} -n {ns_str} -- check Events for BackOff reason")
+            resolutions.append(f"IMMEDIATE: kubectl rollout undo deployment/{deployment_name} -n {ns_str} -- rollback if caused by a bad deploy")
         elif is_oom:
-            mem_matches = re.findall(r'(\d+(?:\.\d+)?)\s*(?:GB|MB|GiB|MiB).*?limit', all_messages, re.IGNORECASE)
-            mem_info = f" (current limit: {mem_matches[0]})" if mem_matches else ""
-            anomalies.append(f"OOMKilled detected{mem_info} — container terminated by kernel out-of-memory killer (exit code 137), pod is restarting")
-            root_causes.append(f"Memory limit{mem_info} is insufficient for the workload — application either has a memory leak or the limit is set too low for peak load")
-            resolutions.append(f"IMMEDIATE: kubectl describe pod {primary_pod} -n {namespace} — look for 'OOMKilled' in Last State and confirm exit code 137 in Events")
-            resolutions.append(f"IMMEDIATE: kubectl logs {primary_pod} -n {namespace} --previous — read heap dump or OOM error from the crashed container")
-            resolutions.append(f"IMMEDIATE: kubectl top pod -n {namespace} — check current memory consumption of all pods in the namespace")
-            resolutions.append(f"IMMEDIATE: kubectl top node — check if the node itself is under memory pressure")
-            resolutions.append(f"IMMEDIATE: kubectl get pod {primary_pod} -n {namespace} -o yaml | grep -A5 resources — confirm the current memory limit")
-            config_issues.append(f"LONG-TERM: Increase memory limit to at least 2x the observed peak usage — update resources.limits.memory in the deployment spec")
-            config_issues.append("LONG-TERM: Set resources.requests.memory = resources.limits.memory (Guaranteed QoS) so the pod is never evicted before OOMKill")
-            config_issues.append("LONG-TERM: Configure HorizontalPodAutoscaler with memory target (70%) to scale out before hitting the OOM threshold")
-            performance_insights.append("Add Prometheus alert: alert when pod memory > 80% of limit for >2 min — kube_pod_container_resource_usage_memory > 0.8 * kube_pod_container_resource_limits_memory")
-
-        elif is_upstream or is_timeout:
-            pod_list = ', '.join(pod_names[:3]) if pod_names else primary_pod
-            anomalies.append(f"Upstream service failures detected — pods [{pod_list}] failing health checks and/or returning timeouts")
-            if is_timeout:
-                anomalies.append("Request timeouts observed — backend pods not responding within acceptable threshold, causing cascading 504s")
-            root_causes.append("Backend pods are unhealthy — either crashing, under heavy load, or network policy is blocking health check probes")
-            resolutions.append(f"IMMEDIATE: kubectl describe pod {primary_pod} -n {namespace} — check Events for probe failures (Liveness/Readiness) and recent restarts")
-            resolutions.append(f"IMMEDIATE: kubectl logs {primary_pod} -n {namespace} --previous — read crash logs if pod has restarted")
-            resolutions.append(f"IMMEDIATE: kubectl get events --sort-by='.lastTimestamp' -n {namespace} — get full cluster event timeline")
-            resolutions.append(f"IMMEDIATE: kubectl get endpointslices -l kubernetes.io/service-name={deployment_name} -n {namespace} — verify healthy endpoints exist behind the service")
-            resolutions.append(f"IMMEDIATE: kubectl top pod -n {namespace} — check if pods are CPU/memory throttled")
-            if is_tls:
-                resolutions.append(f"IMMEDIATE: Check SSL certificate expiry — kubectl get certificate -n {namespace} (if cert-manager) or openssl s_client -connect <host>:443 | openssl x509 -noout -dates")
-                config_issues.append("LONG-TERM: Configure cert-manager with automatic renewal (renewBefore: 720h) so certificate expiry never causes a production incident")
-            config_issues.append(f"LONG-TERM: Add readinessProbe to {deployment_name} with failureThreshold: 3 + periodSeconds: 10 so unhealthy pods are removed from Service load balancing before they impact users")
-            performance_insights.append("Add Prometheus alert for endpoint availability: kube_endpoint_address_available < 1 — triggers when all endpoints for a service are gone")
-
-        elif is_scheduling:
-            anomalies.append("Pod scheduling failures (FailedScheduling) — pods cannot be placed on any node due to insufficient resources")
-            root_causes.append("Cluster nodes lack sufficient CPU or memory to satisfy pod resource requests — either cluster needs scaling or requests are too high")
-            resolutions.append(f"IMMEDIATE: kubectl describe pod {primary_pod} -n {namespace} — read FailedScheduling event for exact resource shortfall (e.g. 'Node didn't have enough resource: CPU, requested: 1000, used: 1420')")
-            resolutions.append("IMMEDIATE: kubectl top node — identify which nodes are at capacity")
-            resolutions.append("IMMEDIATE: kubectl get nodes -o wide — check node count and status")
-            resolutions.append(f"IMMEDIATE: kubectl get pods -n {namespace} -o wide — identify which pods are Pending vs Running")
-        
-        elif is_image_pull:
-            anomalies.append("ImagePullBackOff — Kubernetes cannot pull the container image from the registry")
-            root_causes.append("Image pull failure: registry credentials missing/expired, image tag does not exist, or registry is unreachable")
-            resolutions.append(f"IMMEDIATE: kubectl describe pod {primary_pod} -n {namespace} — check Events for exact pull error (unauthorized, not found, network timeout)")
-            resolutions.append(f"IMMEDIATE: kubectl get secret -n {namespace} | grep registry — verify imagePullSecret exists")
-
-        # ── Generic rules for anything not caught above ────────────────────────
-        if not anomalies:
-            anomalies.append(f"Found {len(critical_errors)} critical error(s) and {len(warnings)} warning(s)")
-            if critical_errors:
-                top_msg = critical_errors[0].get('message', '')[:200]
-                anomalies.append(f"First critical error: {top_msg}")
-            root_causes.append("Multiple errors detected — review full log context for root cause")
-            resolutions.append(f"IMMEDIATE: kubectl describe pod {primary_pod} -n {namespace} — check Events section")
-            resolutions.append(f"IMMEDIATE: kubectl logs {primary_pod} -n {namespace} --previous — check crash logs")
-            resolutions.append(f"IMMEDIATE: kubectl get events --sort-by='.lastTimestamp' -n {namespace}")
-
-        # ── Warnings summary ───────────────────────────────────────────────────
-        if warnings:
-            unique_warn_msgs = list(dict.fromkeys(e.get('message', '')[:120] for e in warnings))
-            anomalies.append(f"{len(warnings)} warning(s) detected — e.g.: {unique_warn_msgs[0]}")
-
-        # ── Health assessment ──────────────────────────────────────────────────
-        if is_crashloop:
-            health = (f"CRITICAL: Deployment {deployment_name} rolling update is stalled with pod {primary_pod} in CrashLoopBackOff. "
-                     f"Service is partially degraded — only healthy pods (from previous revision) are serving traffic. "
-                     f"If not resolved, the deployment is stuck and new pods cannot be rolled out. Immediate rollback is recommended.")
-            severity = "Critical"
-        elif is_oom:
-            health = (f"CRITICAL: Pod {primary_pod} is being OOMKilled repeatedly. "
-                     f"The application cannot sustain its workload within the current memory limit. "
-                     f"Each restart causes a brief service disruption; frequent restarts will degrade reliability significantly.")
-            severity = "Critical"
-        elif len(critical_errors) > 5:
-            health = (f"CRITICAL: {len(critical_errors)} error events detected. "
-                     f"Multiple failure modes are active simultaneously, indicating systemic issues that require immediate triage.")
-            severity = "Critical"
+            anomalies.append(f"OOMKilled on pod {pod_str} (exit 137) — kernel terminated container for exceeding memory limit")
+            root_causes.append("Memory limit is too low for the workload or the application has a memory leak")
+            resolutions.append(f"IMMEDIATE: kubectl describe pod {pod_str} -n {ns_str} -- confirm OOMKilled in Last State")
+            resolutions.append(f"IMMEDIATE: kubectl logs {pod_str} -n {ns_str} --previous -- check heap dump / OOM error in app output")
+            resolutions.append(f"IMMEDIATE: kubectl top pod -n {ns_str} -- check live memory usage")
+            config_issues.append("LONG-TERM: Increase resources.limits.memory to at least 2x observed peak usage")
+        elif is_image:
+            anomalies.append(f"ImagePullBackOff on pod {pod_str} — Kubernetes cannot pull the container image")
+            root_causes.append("Bad image tag, missing imagePullSecret, or registry unreachable")
+            resolutions.append(f"IMMEDIATE: kubectl describe pod {pod_str} -n {ns_str} -- read exact pull error from Events")
+            resolutions.append(f"IMMEDIATE: kubectl get secret -n {ns_str} | grep registry -- verify imagePullSecret exists")
+        elif is_schedule:
+            anomalies.append(f"FailedScheduling — pod {pod_str} cannot be placed on any node")
+            root_causes.append("Cluster nodes lack sufficient CPU or memory for the pod's resource requests")
+            resolutions.append(f"IMMEDIATE: kubectl describe pod {pod_str} -n {ns_str} -- read resource shortfall from Events")
+            resolutions.append("IMMEDIATE: kubectl top node -- identify nodes at capacity")
+        elif is_timeout:
+            anomalies.append("Connection timeouts or 504 errors detected — backend pods may be unhealthy or overloaded")
+            root_causes.append("Upstream service unavailable or responding too slowly")
+            if is_k8s:
+                resolutions.append(f"IMMEDIATE: kubectl describe pod {pod_str} -n {ns_str} -- check probe failures in Events")
+                resolutions.append(f"IMMEDIATE: kubectl top pod -n {ns_str} -- check for CPU/memory throttling")
         elif critical_errors:
-            health = (f"WARNING: {len(critical_errors)} critical error(s) found. "
-                     f"Service may be partially impaired — investigate the errors before they escalate.")
-            severity = "Warning"
+            anomalies.append(f"{len(critical_errors)} critical error(s) detected")
+            if critical_errors:
+                anomalies.append(f"First error: {critical_errors[0].get('message', '')[:200]}")
+            root_causes.append("Application errors — review full log context for root cause")
+            if is_k8s:
+                resolutions.append(f"IMMEDIATE: kubectl describe pod {pod_str} -n {ns_str}")
+                resolutions.append(f"IMMEDIATE: kubectl logs {pod_str} -n {ns_str} --previous")
+                resolutions.append(f"IMMEDIATE: kubectl get events --sort-by=.lastTimestamp -n {ns_str}")
         else:
-            health = f"WARNING: {len(warnings)} warning(s) found. Service appears operational but shows signs of instability."
-            severity = "Warning"
+            anomalies.append(f"{len(critical_errors)} error(s), {len(warnings)} warning(s) — system may be healthy or partially degraded")
+            root_causes.append("No dominant failure pattern detected — review logs manually")
+            resolutions.append("IMMEDIATE: Review the log entries above for specific error signatures")
 
-        # ── Performance insights ───────────────────────────────────────────────
-        if is_rollout and is_crashloop:
-            performance_insights.append("LONG-TERM: Implement a pre-deployment smoke test job (Kubernetes Job that exits 0 only if the new image passes startup checks) — makes CrashLoopBackOff impossible to reach production")
-            performance_insights.append("LONG-TERM: Set maxUnavailable: 0 in rollingUpdate strategy so a broken pod never reduces capacity before it is confirmed healthy")
-        if not performance_insights:
-            performance_insights.append("LONG-TERM: Add structured logging with severity levels and correlate with Prometheus metrics for faster incident detection")
+        if warnings:
+            anomalies.append(f"{len(warnings)} warning(s) also present — e.g. {warnings[0].get('message','')[:120]}")
 
         if not config_issues:
-            config_issues.append("LONG-TERM: Review resource requests and limits — set requests conservatively and limits at 2x requests for burstable QoS")
+            config_issues.append("LONG-TERM: Ensure resource requests and limits are set on all containers to prevent OOMKill and throttling")
+        if not performance_insights:
+            performance_insights.append("Add Prometheus alerts for pod restart rate and memory utilisation to detect these issues earlier")
+
+        if is_crashloop or is_oom:
+            severity = "Critical"
+            health   = f"CRITICAL: Pod {pod_str} is in a failure loop. Service capacity is degraded. Immediate action required."
+        elif critical_errors:
+            severity = "Warning"
+            health   = f"WARNING: {len(critical_errors)} error(s) detected. Investigate before they escalate."
+        elif warnings:
+            severity = "Warning"
+            health   = f"WARNING: {len(warnings)} warning(s) present. System appears operational but needs attention."
+        else:
+            severity = "Healthy"
+            health   = "System appears healthy based on available log data."
 
         return {
             "anomalies": anomalies,
-            "root_causes": root_causes or ["Review error patterns — see anomalies for detected failure signatures"],
+            "root_causes": root_causes,
             "resolutions": resolutions,
             "health_assessment": health,
             "config_issues": config_issues,
             "performance_insights": performance_insights,
             "severity": severity,
-            "confidence_score": 0.75
+            "confidence_score": 0.65
         }
 
-    def _build_smart_prompt(self, condensed_context: str, analysis_type: str) -> str:
-        """Build optimized prompt for condensed context."""
+    def _build_smart_prompt(self, condensed_context: str, analysis_type: str) -> List[Dict[str, str]]:
+        """Build chat messages for Azure OpenAI: system instruction + user log data."""
 
-        system_instruction = """You are a Principal Site Reliability Engineer (SRE) and Senior DevOps Engineer with 15+ years of hands-on experience operating production Kubernetes clusters at scale. You are an expert at the official Kubernetes debugging methodology documented at https://kubernetes.io/docs/tasks/debug/debug-application/ — specifically:
+        system_instruction = """You are a senior Kubernetes SRE and log analysis expert. Analyse the provided pod/cluster logs and return structured troubleshooting intelligence.
 
-KUBERNETES DEBUGGING METHODOLOGY YOU FOLLOW:
-1. kubectl describe pod <pod-name> -n <namespace>  →  always start here; the Events section reveals scheduling failures (FailedScheduling, OOMKilled, BackOff), probe failures, and image pull issues.
-2. kubectl logs <pod-name> -n <namespace> --previous  →  crash logs from the LAST terminated container (essential for CrashLoopBackOff).
-3. kubectl get events --sort-by='.lastTimestamp' -n <namespace>  →  cluster-level timeline of what happened.
-4. kubectl top pod / kubectl top node  →  live resource consumption; confirms OOMKill pressure.
-5. kubectl get pod <pod-name> -n <namespace> -o yaml  →  full spec: resource limits, probes, env vars, volume mounts.
-6. kubectl get endpointslices -l kubernetes.io/service-name=<svc> -n <namespace>  →  checks if Service has healthy endpoints behind it.
-7. kubectl exec -it <pod-name> -n <namespace> -- sh  →  interactive shell for in-container debugging.
-8. kubectl debug -it <pod-name> --image=busybox:1.28 --target=<container> -n <namespace>  →  ephemeral debug container for distroless/crashed containers.
-9. kubectl debug node/<node-name> -it --image=ubuntu --profile=sysadmin  →  node-level debugging (filesystem, network capture).
-10. kubectl rollout history / kubectl rollout undo  →  deployment rollback when a bad deploy caused the issue.
+ANALYSIS RULES:
+- Read every log level. INFO is often the real signal: repeated startup lines = restarts, path errors = infrastructure issues, config warnings = misconfigurations.
+- Extract pod names, namespaces, containers, IPs, and service names directly from the log text. Never invent or guess names.
+- Use kubectl commands only when logs contain Kubernetes context (pod paths, namespace refs, K8s events). For non-K8s logs use appropriate system tools.
+- Every finding must be tied to specific content from the provided logs — no generic advice.
 
-KEY FAILURE PATTERNS YOU RECOGNIZE:
-- OOMKilled (exit code 137): memory.limit too low or application memory leak
-- CrashLoopBackOff: application crash on startup — check --previous logs for root cause
-- Pending pods: insufficient resources (CPU/memory) on nodes — check Events for FailedScheduling
-- Upstream timeouts / 504s from Ingress: backend pods unhealthy, check endpoints and health checks
-- SSL/TLS cert expiry: certificate rotation needed
-- Java heap space / OutOfMemoryError: JVM heap too small or memory leak in application code
-- Connection pool exhaustion: Redis/DB max connections hit, need pool tuning or scaling
-- Init:CrashLoopBackOff: init container failing — check init container logs separately
+K8s PATH FORMAT — parse these to get real entity names:
+  /var/log/pods/NAMESPACE_PODNAME_UUID/CONTAINER/N.log
+  e.g. /var/log/pods/default_mywebapp-release-55b79f8579-fwkvh_5e69fa47-35fe-4ab9-a69e-3686915b6081/webapp/6.log
+  → namespace=default | pod=mywebapp-release-55b79f8579-fwkvh | container=webapp
 
-You approach every incident: triage first → correlate timeline → distinguish root cause from downstream symptoms → actionable remediation with exact commands."""
+K8s TROUBLESHOOTING (use actual names from the logs, not placeholders):
+  kubectl describe pod <POD> -n <NS>                    → Events: OOMKill, BackOff, probe/image failures
+  kubectl logs <POD> -n <NS> --previous                 → crash output from last container run
+  kubectl get events --sort-by=.lastTimestamp -n <NS>   → full incident timeline
+  kubectl top pod -n <NS> / kubectl top node            → live resource pressure
+  kubectl rollout undo deployment/<DEPLOY> -n <NS>      → rollback a bad deploy
 
-        base_prompt = f"""{system_instruction}
+KNOWN PATTERNS:
+  OOMKilled / exit 137          → memory limit or leak; check --previous logs + kubectl top
+  CrashLoopBackOff              → app crashes on startup; kubectl logs --previous reveals exact reason
+  FailedScheduling / Pending    → node lacks CPU/memory; kubectl describe pod + kubectl top node
+  ImagePullBackOff              → bad image tag or missing registry credentials
+  Symlink error in /var/log/pods/... → log collector read a rotated file; pod is likely NOT crashing
+  Repeated startup INFO lines   → container is cycling; check restart count
+  504 / upstream timeout        → backend pods unhealthy; kubectl get endpointslices + kubectl top pod"""
 
-You are investigating a production incident. Below are the actual log lines extracted from the system. Read them carefully — extract service names, pod names, error messages, and timestamps directly from the text.
-
-=== ACTUAL LOG DATA ===
+        user_content = f"""=== LOG DATA ===
 {condensed_context}
-=== END LOG DATA ===
+=== END ===
 
-YOUR TASK: Analyze these logs as a senior DevOps engineer responding to a live production incident.
-
-STEP 1 — SEVERITY
-Classify: Critical / Warning / Healthy. Justify based on actual log evidence.
-
-STEP 2 — LOG ANALYSIS  
-- What actually happened? Describe the failure chain using real log lines as evidence.
-- What are the root causes vs downstream symptoms?
-- Which specific services/pods/components are affected? (use the names you see in the logs)
-- What is the blast radius?
-
-STEP 3 — IMMEDIATE TROUBLESHOOTING (next 15 minutes)
-Write specific kubectl commands using the ACTUAL service/pod names you extracted from the logs.
-If logs mention "order-svc-pod-3", use that exact name.
-If logs mention "payment-processor", use that exact name.
-Commands must be actionable right now.
-
-STEP 4 — LONG-TERM FIXES
-Prevent this from happening again: resource limits, probe configuration, HPA/VPA, circuit breakers, alerting rules.
-
-Return ONLY raw JSON (no markdown, no extra text):
+Return ONLY a raw JSON object — no markdown fences, no text outside the JSON:
 {{
-    "anomalies": [
-        "Direct quote or paraphrase of the specific failure observed — e.g. 'order-svc-pod-3 failed health check 3/3 consecutive times at 14:30:10, then pod-1 followed at 14:31:09 — both pods lost simultaneously'",
-        "Another specific failure pattern with actual service names and timestamps from the logs"
-    ],
-    "root_causes": [
-        "Technical root cause with evidence from the actual log lines — e.g. 'Java heap space exhausted at 02:22:11 after memory climbed from 72% (02:20:11) to 93% (02:22:09) to 98% (02:22:10) — application memory leak in TransactionProcessor.loadBatch()'",
-        "Contributing or cascading factor"
-    ],
-    "resolutions": [
-        "IMMEDIATE: kubectl describe pod <actual-pod-name-from-logs> -n <namespace> — check Events section for OOMKilled, BackOff, or FailedScheduling reasons",
-        "IMMEDIATE: kubectl logs <actual-pod-name-from-logs> -n <namespace> --previous — retrieve crash logs from the terminated container",
-        "IMMEDIATE: kubectl get events --sort-by='.lastTimestamp' -n <namespace> — get the full cluster event timeline",
-        "IMMEDIATE: kubectl top pod -n <namespace> and kubectl top node — confirm live resource pressure",
-        "IMMEDIATE: <any other specific command relevant to THIS incident based on what you see in the logs>"
-    ],
-    "health_assessment": "2-3 sentence paragraph: What is broken right now, what is the impact on end users/services, and what will happen if this is not addressed in the next 30 minutes.",
-    "config_issues": [
-        "LONG-TERM: Specific config change with rationale — e.g. 'Increase memory limit from 2Gi to 4Gi and set request=2Gi to prevent OOMKill; current 2GB limit is insufficient for transaction batch sizes seen in logs'",
-        "LONG-TERM: Add readinessProbe with failureThreshold: 3 and periodSeconds: 10 to stop traffic to degraded pods before they fully fail",
-        "LONG-TERM: Configure HorizontalPodAutoscaler targeting 70% memory utilization to scale before hitting OOM threshold"
-    ],
-    "performance_insights": [
-        "Strategic architectural insight to prevent recurrence — specific to what you saw in these logs",
-        "Prometheus alert rule to add — e.g. 'Alert when pod memory > 80% of limit for >2 minutes: kube_pod_container_resource_usage_memory > 0.8 * kube_pod_container_resource_limits_memory'",
-        "Any other SRE-level insight: circuit breaker config, retry budgets, PDB, topology spread"
-    ],
-    "severity": "Critical",
-    "confidence_score": 0.95
+  "anomalies": [
+    "Specific finding with real names and log evidence — e.g. 'Pod mywebapp-release-55b79f8579-fwkvh (ns: default): kubelet emitted INFO symlink error for webapp/6.log — log collector read a file already rotated away; appeared 2x'"
+  ],
+  "root_causes": [
+    "Root cause grounded in log evidence — e.g. 'Log-rotation race: kubelet rotated webapp/6.log while the collector still held a file handle. Pod is running normally; this is a log pipeline lag issue, not a pod failure.'"
+  ],
+  "resolutions": [
+    "IMMEDIATE: kubectl get pod <real-pod-name> -n <real-namespace> — verify pod status and restart count",
+    "IMMEDIATE: <next exact command using real names extracted from the logs>"
+  ],
+  "health_assessment": "2-3 sentences on current system state, user/service impact, and what happens if unaddressed — specific to these logs only.",
+  "config_issues": [
+    "LONG-TERM: Specific actionable fix for the root cause observed"
+  ],
+  "performance_insights": [
+    "Specific monitoring/alerting improvement tied to the failure pattern found — not generic advice"
+  ],
+  "severity": "Warning",
+  "confidence_score": 0.9
 }}
 
-CRITICAL RULES — violating these makes your analysis worthless:
-- anomalies MUST reference actual log content (service names, error messages, timestamps) — not generic descriptions
-- resolutions MUST contain actual kubectl commands with real pod/service names from the logs where possible
-- config_issues MUST start with "LONG-TERM:" and be specific to what you observed
-- resolutions MUST start with "IMMEDIATE:"  
-- severity must be exactly one of: "Critical", "Warning", "Healthy"
-- DO NOT write "check logs" — always give the exact command
-- DO NOT write generic advice that applies to any log file — be specific to THIS incident"""
+RULES (violations make the response useless):
+  - Use real names from the logs; never output <pod-name>, <namespace>, or invented names
+  - resolutions must start with IMMEDIATE:  |  config_issues must start with LONG-TERM:
+  - severity must be exactly: Critical, Warning, or Healthy
+  - No kubectl commands when logs contain no Kubernetes context"""
 
-        return base_prompt
-    
+        return [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": user_content},
+        ]
+
     def _parse_response(self, response_text: str) -> Dict:
         """Parse LLM response into structured format."""
         try:
             # Clean up the response text
             response_text = response_text.strip()
-            
+
             # Remove markdown code blocks if present
             if response_text.startswith('```json'):
                 response_text = response_text[7:]  # Remove ```json

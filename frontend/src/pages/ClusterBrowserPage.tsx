@@ -1,13 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Server, Activity, AlertCircle, Loader2, ChevronDown, ChevronRight, CheckCircle } from 'lucide-react';
 import { k8sAPI, logAPI, parseAnalysis } from '../services/api';
 import { K8sPodInfo, ClusterHealth, AnalysisResult } from '../types';
+import { useAnalysis } from '../context/AnalysisContext';
 
 const SESSION_KEY = 'clusterBrowserState';
 
 const ClusterBrowserPage: React.FC = () => {
   const navigate = useNavigate();
+  const { startTracking, jobs, clearJob } = useAnalysis();
+  const handledClusterJobsRef = useRef<Set<string>>(new Set());
+
   const [health, setHealth] = useState<ClusterHealth | null>(null);
   const [namespaces, setNamespaces] = useState<string[]>([]);
   const [selectedNamespace, setSelectedNamespace] = useState<string>('');
@@ -18,11 +22,46 @@ const ClusterBrowserPage: React.FC = () => {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingLogs, setLoadingLogs] = useState(false);
-  const [analyzing, setAnalyzing] = useState(false);
   const [analyzeStatus, setAnalyzeStatus] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [expandedPods, setExpandedPods] = useState<Set<string>>(new Set());
+
+  // ── Derived: the active cluster analysis job (if any) ─────────────────────
+  const clusterJob = Object.values(jobs)
+    .filter(j => j.source === 'cluster')
+    .sort((a, b) => b.startedAt - a.startedAt)[0];
+
+  const isAnalyzing =
+    clusterJob?.status === 'pending' || clusterJob?.status === 'running';
+
+  // ── When a cluster job finishes, navigate to Dashboard ────────────────────
+  useEffect(() => {
+    const done = Object.values(jobs).find(
+      j =>
+        j.source === 'cluster' &&
+        j.status === 'completed' &&
+        j.result &&
+        !handledClusterJobsRef.current.has(j.jobId),
+    );
+    if (!done) return;
+    handledClusterJobsRef.current.add(done.jobId);
+    const meta = done.metadata as { pod?: K8sPodInfo } | undefined;
+    const parsed = parseAnalysis(done.result!);
+    setAnalysis(parsed);
+    setSuccessMessage(`Analysis complete for ${meta?.pod?.name ?? 'pod'}! Redirecting to Dashboard…`);
+    clearJob(done.jobId);
+    setTimeout(() => {
+      navigate('/dashboard', {
+        state: {
+          analysis: parsed,
+          sourcePod: meta?.pod?.name,
+          sourceNamespace: meta?.pod?.namespace,
+        },
+      });
+    }, 1200);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs]);
 
   // Hold saved namespace in a ref so loadClusterData can use it after async fetch
   const savedNamespaceRef = React.useRef<string | null>(null);
@@ -111,7 +150,6 @@ const ClusterBrowserPage: React.FC = () => {
   };
 
   const analyzeLogs = async (pod: K8sPodInfo) => {
-    setAnalyzing(true);
     setAnalyzeStatus('Collecting logs...');
     setError(null);
     setSuccessMessage(null);
@@ -128,7 +166,6 @@ const ClusterBrowserPage: React.FC = () => {
         setSelectedPod(pod);
         setCurrentResourceId(resourceId);
       } else if (resourceId === null) {
-        // Logs were fetched without store=true before; re-fetch with store=true now
         const logsData = await k8sAPI.getPodLogs(pod.namespace, pod.name, undefined, 100, true);
         podLogs = logsData.logs;
         resourceId = logsData.resource_id ?? null;
@@ -137,31 +174,16 @@ const ClusterBrowserPage: React.FC = () => {
 
       if (podLogs.length === 0) {
         setError('No logs available for this pod');
+        setAnalyzeStatus('');
         return;
       }
 
-      setAnalyzeStatus('Running AI analysis...');
-      // Use resource_id so the backend can find the stored entries
-      const analysisData = await logAPI.analyzeLogs(resourceId ?? undefined, undefined, 'general');
-      const parsedAnalysis = parseAnalysis(analysisData);
-      setAnalysis(parsedAnalysis);
-
-      setAnalyzeStatus('Done!');
-      setSuccessMessage(`Analysis complete for ${pod.name}! Redirecting to Dashboard...`);
-
-      setTimeout(() => {
-        navigate('/dashboard', {
-          state: {
-            analysis: parsedAnalysis,
-            sourcePod: pod.name,
-            sourceNamespace: pod.namespace,
-          },
-        });
-      }, 1200);
+      setAnalyzeStatus('Starting AI analysis…');
+      const job = await logAPI.analyzeLogs(resourceId ?? undefined, undefined, 'general');
+      startTracking(job.job_id, 'cluster', pod.name, resourceId ?? undefined, { pod });
+      setAnalyzeStatus(`AI is analyzing ${pod.name}…`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Analysis failed');
-    } finally {
-      setAnalyzing(false);
       setAnalyzeStatus('');
     }
   };
@@ -305,11 +327,11 @@ const ClusterBrowserPage: React.FC = () => {
                       </button>
                       <button
                         onClick={() => analyzeLogs(pod)}
-                        disabled={analyzing}
+                        disabled={isAnalyzing}
                         className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white text-sm px-3 py-1 rounded"
                       >
-                        {analyzing && selectedPod?.name === pod.name
-                          ? analyzeStatus || 'Analyzing...'
+                        {isAnalyzing && (clusterJob?.metadata as any)?.pod?.name === pod.name
+                          ? `Analyzing… (${clusterJob!.elapsedSeconds}s)`
                           : 'Analyze'}
                       </button>
                     </div>

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Upload, AlertCircle, CheckCircle, Loader2, FileText,
@@ -7,17 +7,44 @@ import {
 } from 'lucide-react';
 import { logAPI, parseAnalysis } from '../services/api';
 import { LogUploadResponse, AnalysisResult } from '../types';
+import { useAnalysis } from '../context/AnalysisContext';
 type Phase = 'select' | 'uploading' | 'uploaded' | 'analyzing' | 'analyzed';
 
 const UploadPage: React.FC = () => {
   const navigate = useNavigate();
+  const { startTracking, getLatestJob, clearJob } = useAnalysis();
+
   const [phase, setPhase] = useState<Phase>('select');
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [uploadResult, setUploadResult] = useState<LogUploadResponse | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
-  const [analyzeStatus, setAnalyzeStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  // ── Sync context upload job → local display state ──────────────────────────
+  // This runs whenever the job status/elapsed changes (every ~2.5s while active).
+  const uploadJob = getLatestJob('upload');
+
+  useEffect(() => {
+    if (!uploadJob) return;
+    const meta = uploadJob.metadata as { uploadResult?: LogUploadResponse } | undefined;
+    // Restore uploadResult from context metadata if local state is empty
+    if (meta?.uploadResult && !uploadResult) {
+      setUploadResult(meta.uploadResult);
+    }
+    if (uploadJob.status === 'completed' && uploadJob.result) {
+      setAnalysis(parseAnalysis(uploadJob.result));
+      setPhase('analyzed');
+      setError(null);
+    } else if (uploadJob.status === 'failed') {
+      setError(uploadJob.error || 'Analysis failed');
+      setPhase(meta?.uploadResult || uploadResult ? 'uploaded' : 'select');
+    } else if (uploadJob.status === 'pending' || uploadJob.status === 'running') {
+      setPhase('analyzing');
+    }
+  // elapsedSeconds changes on every poll — keeps the elapsed display fresh
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadJob?.status, uploadJob?.elapsedSeconds]);
 
   const handleFileSelect = (f: File) => {
     setFile(f);
@@ -39,11 +66,11 @@ const UploadPage: React.FC = () => {
   const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setDragOver(true); };
 
   const handleReset = () => {
+    if (uploadJob) clearJob(uploadJob.jobId);
     setFile(null);
     setUploadResult(null);
     setAnalysis(null);
     setError(null);
-    setAnalyzeStatus('');
     setPhase('select');
   };
 
@@ -54,7 +81,13 @@ const UploadPage: React.FC = () => {
     try {
       const result = await logAPI.uploadFile(file);
       setUploadResult(result);
-      setPhase('uploaded');
+      if (result.job_id) {
+        // The upload endpoint already started an analysis job — track it.
+        startTracking(result.job_id, 'upload', file.name, result.file_id, { uploadResult: result });
+        setPhase('analyzing');
+      } else {
+        setPhase('uploaded');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');
       setPhase('select');
@@ -63,21 +96,13 @@ const UploadPage: React.FC = () => {
 
   const handleAnalyze = async () => {
     if (!uploadResult) return;
-    setPhase('analyzing');
     setError(null);
     try {
-      setAnalyzeStatus('Preparing log entries...');
-      await new Promise(r => setTimeout(r, 400));
-      setAnalyzeStatus('Sending to AI engine...');
-      await new Promise(r => setTimeout(r, 300));
-      setAnalyzeStatus('Running senior DevOps analysis...');
-      const raw = await logAPI.analyzeLogs(uploadResult.file_id, undefined, 'general');
-      setAnalyzeStatus('Processing results...');
-      await new Promise(r => setTimeout(r, 300));
-      setAnalysis(parseAnalysis(raw));
-      setPhase('analyzed');
+      const job = await logAPI.analyzeLogs(uploadResult.file_id, undefined, 'general');
+      startTracking(job.job_id, 'upload', file?.name ?? 'Log file', uploadResult.file_id, { uploadResult });
+      setPhase('analyzing');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Analysis failed');
+      setError(err instanceof Error ? err.message : 'Failed to start analysis');
       setPhase('uploaded');
     }
   };
@@ -230,7 +255,9 @@ const UploadPage: React.FC = () => {
             className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:text-gray-500 text-white font-semibold py-4 px-4 rounded-xl transition-colors flex items-center justify-center gap-2.5 text-base shadow-lg shadow-purple-900/30"
           >
             {phase === 'analyzing' ? (
-              <><Loader2 className="animate-spin h-5 w-5" />{analyzeStatus || 'Analyzing…'}</>
+              <><Loader2 className="animate-spin h-5 w-5" />
+                {uploadJob ? `AI is analyzing your logs (${uploadJob.elapsedSeconds}s)…` : 'Analyzing…'}
+              </>
             ) : (
               <><Brain className="h-5 w-5" /> Analyze with AI &nbsp;<span className="text-purple-300 text-sm font-normal">(Senior DevOps)</span></>
             )}
@@ -244,7 +271,9 @@ const UploadPage: React.FC = () => {
                   <span key={i} className={`h-1.5 w-6 rounded-full ${i < 3 ? 'bg-purple-500 animate-pulse' : 'bg-gray-700'}`} />
                 ))}
               </div>
-              <p className="text-gray-400 text-sm">{analyzeStatus}</p>
+              <p className="text-gray-400 text-sm">
+                {uploadJob ? `AI is analyzing your logs (${uploadJob.elapsedSeconds}s)…` : 'Analyzing…'}
+              </p>
             </div>
           )}
 

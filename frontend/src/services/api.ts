@@ -4,6 +4,7 @@ import {
   K8sResource,
   LogAnalysis,
   LogUploadResponse,
+  AnalysisJob,
   K8sPodInfo,
   ClusterHealth,
   AnalysisResult,
@@ -57,8 +58,8 @@ export const logAPI = {
     await api.delete(`/logs/sessions/${sessionId}`);
   },
 
-  analyzeLogs: async (resourceId?: number, sourceFile?: string, analysisType = 'general'): Promise<LogAnalysis> => {
-    const response = await api.post<LogAnalysis>('/logs/analyze', {
+  analyzeLogs: async (resourceId?: number, sourceFile?: string, analysisType = 'general'): Promise<AnalysisJob> => {
+    const response = await api.post<AnalysisJob>('/logs/analyze', {
       resource_id: resourceId,
       source_file: sourceFile,
       analysis_type: analysisType,
@@ -66,9 +67,47 @@ export const logAPI = {
     return response.data;
   },
 
-  getAnalysis: async (analysisId: number): Promise<LogAnalysis> => {
-    const response = await api.get<LogAnalysis>(`/logs/analysis/${analysisId}`);
+  getJobStatus: async (jobId: string): Promise<AnalysisJob> => {
+    const response = await api.get<AnalysisJob>(`/logs/jobs/${jobId}`);
     return response.data;
+  },
+
+  /** Poll an already-started job by its ID until it completes or fails. */
+  pollJob: async (
+    jobId: string,
+    onProgress?: (elapsedSeconds: number) => void,
+    intervalMs = 2500,
+  ): Promise<LogAnalysis> => {
+    const start = Date.now();
+    while (true) {
+      await new Promise(r => setTimeout(r, intervalMs));
+      let current: AnalysisJob;
+      try {
+        current = await logAPI.getJobStatus(jobId);
+      } catch {
+        throw new Error('Job not found — the server may have restarted. Please re-analyse.');
+      }
+      onProgress?.(Math.floor((Date.now() - start) / 1000));
+      if (current.status === 'completed') {
+        if (!current.result) throw new Error('Analysis completed but result missing');
+        return current.result;
+      }
+      if (current.status === 'failed') {
+        throw new Error(current.error || 'Analysis failed');
+      }
+    }
+  },
+
+  /** Start a new analysis job and poll until done. */
+  analyzeAndPoll: async (
+    resourceId?: number,
+    sourceFile?: string,
+    analysisType = 'general',
+    onProgress?: (elapsedSeconds: number) => void,
+    intervalMs = 2500,
+  ): Promise<LogAnalysis> => {
+    const job = await logAPI.analyzeLogs(resourceId, sourceFile, analysisType);
+    return logAPI.pollJob(job.job_id, onProgress, intervalMs);
   },
 };
 

@@ -34,6 +34,14 @@ export interface LogUploadResponse {
   file_id: number;
   entries_count: number;
   analysis_id?: number;
+  job_id?: string;
+}
+
+export interface AnalysisJob {
+  job_id: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  result?: LogAnalysis;
+  error?: string;
 }
 
 export interface K8sPodInfo {

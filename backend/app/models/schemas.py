@@ -81,6 +81,14 @@ class LogUploadResponse(BaseModel):
     file_id: int
     entries_count: int
     analysis_id: Optional[int] = None
+    job_id: Optional[str] = None  # async analysis job ID for polling
+
+
+class AnalysisJobResponse(BaseModel):
+    job_id: str
+    status: str  # pending | running | completed | failed
+    result: Optional[LogAnalysisResponse] = None
+    error: Optional[str] = None
 
 
 class K8sPodInfo(BaseModel):

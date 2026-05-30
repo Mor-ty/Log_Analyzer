@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BarChart3, PieChart, TrendingUp, Loader2, AlertCircle, Filter, Brain, Trash2, Server, FileText, History, ChevronDown, ChevronUp } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { logAPI, parseAnalysis } from '../services/api';
 import { LogEntry, K8sResource, LogSession } from '../types';
+import { useAnalysis } from '../context/AnalysisContext';
 import {
   BarChart,
   Bar,
@@ -19,13 +20,15 @@ import {
 
 const DashboardPage: React.FC = () => {
   const location = useLocation();
+  const { startTracking, getLatestJob, clearJob, jobs } = useAnalysis();
+  /** Tracks which completed dashboard jobs we've already shown a popup for. */
+  const handledJobsRef = useRef<Set<string>>(new Set());
+
   const [resources, setResources] = useState<K8sResource[]>([]);
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [selectedResource, setSelectedResource] = useState<number | null>(null);
   const [selectedLevel, setSelectedLevel] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [analyzeStatus, setAnalyzeStatus] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<any>(null);
   const [showAnalysisPopup, setShowAnalysisPopup] = useState(false);
@@ -36,6 +39,25 @@ const DashboardPage: React.FC = () => {
   const [confirmDeleteSessionId, setConfirmDeleteSessionId] = useState<number | null>(null);
   const [expandedGroupName, setExpandedGroupName] = useState<string | null>(null);
   const [confirmDeleteGroupName, setConfirmDeleteGroupName] = useState<string | null>(null);
+
+  // ── Watch for dashboard jobs that complete — show popup automatically ──────
+  useEffect(() => {
+    const completedJobs = Object.values(jobs).filter(
+      j =>
+        j.source === 'dashboard' &&
+        j.status === 'completed' &&
+        j.result &&
+        !handledJobsRef.current.has(j.jobId),
+    );
+    if (completedJobs.length === 0) return;
+    const latest = completedJobs.sort((a, b) => b.startedAt - a.startedAt)[0];
+    handledJobsRef.current.add(latest.jobId);
+    setAnalysis(parseAnalysis(latest.result!));
+    setShowAnalysisPopup(true);
+    loadSessions();
+    clearJob(latest.jobId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs]);
 
   // Show popup if redirected from Cluster page with analysis in state
   useEffect(() => {
@@ -91,26 +113,14 @@ const DashboardPage: React.FC = () => {
   };
 
   const handleAnalyze = async (resourceId: number) => {
-    setAnalyzing(true);
-    setAnalyzeStatus('Starting analysis...');
     setError(null);
     try {
-      setAnalyzeStatus('Fetching log entries...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-      setAnalyzeStatus('Running AI analysis...');
-      const analysisData = await logAPI.analyzeLogs(resourceId, undefined, 'general');
-      setAnalyzeStatus('Processing results...');
-      await new Promise(resolve => setTimeout(resolve, 300));
-      const parsedAnalysis = parseAnalysis(analysisData);
-      setAnalysis(parsedAnalysis);
-      setAnalyzeStatus('Analysis complete!');
-      setShowAnalysisPopup(true);
-      await loadSessions();
+      const resource = resources.find(r => r.id === resourceId);
+      const label = resource ? `${resource.namespace}/${resource.pod_name}` : `Resource #${resourceId}`;
+      const job = await logAPI.analyzeLogs(resourceId, undefined, 'general');
+      startTracking(job.job_id, 'dashboard', label, resourceId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Analysis failed');
-      setAnalyzeStatus('');
-    } finally {
-      setAnalyzing(false);
+      setError(err instanceof Error ? err.message : 'Failed to start analysis');
     }
   };
 
@@ -506,23 +516,33 @@ const DashboardPage: React.FC = () => {
             {/* Actions */}
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Actions</label>
-              <button
-                onClick={() => selectedResource && handleAnalyze(selectedResource)}
-                disabled={!selectedResource || analyzing}
-                className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:text-gray-500 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm h-9"
-              >
-                {analyzing ? (
-                  <><Loader2 className="animate-spin h-4 w-4" />{analyzeStatus || 'Analyzing…'}</>
-                ) : (
-                  <><Brain className="h-4 w-4" />Analyze with AI</>
-                )}
-              </button>
-              {!selectedResource && (
-                <p className="text-xs text-gray-500 text-center">Select a resource above to analyze</p>
-              )}
-              {analyzing && analyzeStatus && (
-                <p className="text-xs text-gray-400 text-center">{analyzeStatus}</p>
-              )}
+              {(() => {
+                const rJob = selectedResource ? getLatestJob('dashboard', selectedResource) : undefined;
+                const isAnalyzing = rJob?.status === 'pending' || rJob?.status === 'running';
+                return (
+                  <>
+                    <button
+                      onClick={() => selectedResource && handleAnalyze(selectedResource)}
+                      disabled={!selectedResource || isAnalyzing}
+                      className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:text-gray-500 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm h-9"
+                    >
+                      {isAnalyzing ? (
+                        <><Loader2 className="animate-spin h-4 w-4" />Analyzing…</>
+                      ) : (
+                        <><Brain className="h-4 w-4" />Analyze with AI</>
+                      )}
+                    </button>
+                    {!selectedResource && (
+                      <p className="text-xs text-gray-500 text-center">Select a resource above to analyze</p>
+                    )}
+                    {isAnalyzing && rJob && (
+                      <p className="text-xs text-indigo-400 text-center animate-pulse">
+                        AI processing… {rJob.elapsedSeconds}s elapsed
+                      </p>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           </div>
         </div>

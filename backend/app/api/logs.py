@@ -1,22 +1,99 @@
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
-from app.core.database import get_db
+from app.core.database import get_db, SessionLocal
 from app.models.log import LogEntry, K8sResource, LogAnalysis, LogSession
 from app.models.schemas import (
     LogEntryResponse,
     LogUploadResponse,
     LogAnalysisRequest,
     LogAnalysisResponse,
+    AnalysisJobResponse,
     K8sResourceResponse,
     LogSessionResponse
 )
 from app.services.log_parser import LogParser
 from app.services.llm_analyzer import LLMLogAnalyzer
+import asyncio
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 router = APIRouter()
 log_parser = LogParser()
 llm_analyzer = LLMLogAnalyzer()
+
+# ── Async job infrastructure ───────────────────────────────────────────────────
+_executor = ThreadPoolExecutor(max_workers=4)
+_jobs: dict = {}  # job_id -> {status, result, error, analysis_id}
+
+
+def _run_analysis_job(
+    job_id: str,
+    log_dicts: list,
+    resource_id: Optional[int],
+    source_file: Optional[str],
+    analysis_type: str,
+):
+    """Blocking analysis task — runs in a thread pool with its own DB session."""
+    db = SessionLocal()
+    try:
+        _jobs[job_id]["status"] = "running"
+        analysis = llm_analyzer.analyze_logs(log_dicts, analysis_type)
+
+        log_analysis = LogAnalysis(
+            resource_id=resource_id,
+            source_file=source_file,
+            analysis_type=analysis_type,
+            findings={"anomalies": analysis.get("anomalies", [])},
+            suggestions=analysis,
+        )
+        db.add(log_analysis)
+        db.commit()
+        db.refresh(log_analysis)
+
+        # Auto-create session
+        severity = analysis.get("severity")
+        resource_name = source_file or "Unknown"
+        if resource_id:
+            r = db.query(K8sResource).filter(K8sResource.id == resource_id).first()
+            if r:
+                resource_name = r.pod_name
+        session = LogSession(
+            name=resource_name,
+            source_type="pod" if resource_id else "file",
+            resource_id=resource_id,
+            analysis_id=log_analysis.id,
+            entry_count=len(log_dicts),
+            severity=severity,
+        )
+        db.add(session)
+        db.commit()
+
+        _jobs[job_id]["status"] = "completed"
+        _jobs[job_id]["analysis_id"] = log_analysis.id
+        # Serialise result for polling response
+        import json as _json
+        findings = log_analysis.findings
+        suggestions = log_analysis.suggestions
+        if isinstance(findings, str):
+            findings = _json.loads(findings)
+        if isinstance(suggestions, str):
+            suggestions = _json.loads(suggestions)
+        _jobs[job_id]["result"] = {
+            "id": log_analysis.id,
+            "resource_id": resource_id,
+            "source_file": source_file,
+            "analysis_type": analysis_type,
+            "findings": findings,
+            "suggestions": suggestions,
+            "created_at": log_analysis.created_at.isoformat(),
+        }
+    except Exception as exc:
+        _jobs[job_id]["status"] = "failed"
+        _jobs[job_id]["error"] = str(exc)
+        print(f"[job {job_id}] Analysis failed: {exc}")
+    finally:
+        db.close()
 
 
 @router.post("/upload", response_model=LogUploadResponse)
@@ -87,46 +164,26 @@ async def upload_log_file(
         
         db.commit()
         
-        # Trigger analysis (with error handling)
-        try:
-            analysis = llm_analyzer.analyze_logs(parsed_entries)
-            
-            # Store analysis
-            log_analysis = LogAnalysis(
-                resource_id=resource.id,
-                source_file=file.filename,
-                analysis_type="upload",
-                findings={"anomalies": analysis.get("anomalies", [])},
-                suggestions=analysis
-            )
-            db.add(log_analysis)
-            db.commit()
-            db.refresh(log_analysis)
-
-            # Auto-create session for uploaded file
-            severity = analysis.get('severity', None)
-            session = LogSession(
-                name=file.filename,
-                source_type='file',
-                resource_id=resource.id,
-                analysis_id=log_analysis.id,
-                entry_count=entries_created,
-                severity=severity
-            )
-            db.add(session)
-            db.commit()
-
-            analysis_id = log_analysis.id
-        except Exception as analysis_error:
-            print(f"Analysis failed during upload: {analysis_error}")
-            analysis_id = None
-            # Don't rollback - file upload should succeed even if analysis fails
+        # Start analysis in background — does NOT block the upload response
+        log_dicts = [
+            {
+                'timestamp': e.get('timestamp'),
+                'level': str(e.get('level', '')),
+                'message': e.get('message', ''),
+                'raw_log': e.get('message', ''),
+            }
+            for e in parsed_entries
+        ]
+        job_id = str(uuid.uuid4())
+        _jobs[job_id] = {"status": "pending", "result": None, "error": None, "analysis_id": None}
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(_executor, _run_analysis_job, job_id, log_dicts, resource.id, file.filename, "upload")
         
         return LogUploadResponse(
-            message="Log file uploaded and analyzed successfully",
+            message="Log file uploaded — analysis running in background",
             file_id=resource.id,
             entries_count=entries_created,
-            analysis_id=analysis_id
+            job_id=job_id,
         )
         
     except HTTPException:
@@ -164,79 +221,66 @@ def get_resources(db: Session = Depends(get_db)):
     return resources
 
 
-@router.post("/analyze", response_model=LogAnalysisResponse)
-def analyze_logs(
+@router.post("/analyze", response_model=AnalysisJobResponse)
+async def analyze_logs(
     request: LogAnalysisRequest,
     db: Session = Depends(get_db)
 ):
-    """Trigger LLM analysis for logs from a specific resource."""
+    """Start async LLM analysis — returns a job_id to poll for results."""
     try:
-        # Fetch log entries
         query = db.query(LogEntry)
-        
         if request.resource_id:
             query = query.filter(LogEntry.resource_id == request.resource_id)
         elif request.source_file:
             query = query.filter(LogEntry.source_file == request.source_file)
         else:
             raise HTTPException(status_code=400, detail="Either resource_id or source_file must be provided")
-        
+
         log_entries = query.all()
-        
         if not log_entries:
             raise HTTPException(status_code=404, detail="No log entries found")
-        
-        # Convert to dict format for analyzer
+
         log_dicts = [
             {
                 'timestamp': entry.timestamp.isoformat() if entry.timestamp else None,
                 'level': entry.level.value if entry.level else None,
                 'message': entry.message,
-                'raw_log': entry.raw_log
+                'raw_log': entry.raw_log,
             }
             for entry in log_entries
         ]
-        
-        # Run analysis
-        analysis = llm_analyzer.analyze_logs(log_dicts, request.analysis_type)
-        
-        # Store analysis
-        log_analysis = LogAnalysis(
-            resource_id=request.resource_id,
-            source_file=request.source_file,
-            analysis_type=request.analysis_type,
-            findings={"anomalies": analysis.get("anomalies", [])},
-            suggestions=analysis
-        )
-        db.add(log_analysis)
-        db.commit()
-        db.refresh(log_analysis)
 
-        # Determine severity and auto-create session
-        severity = analysis.get('severity', None)
-        resource_name = (
-            db.query(K8sResource).filter(K8sResource.id == request.resource_id).first().pod_name
-            if request.resource_id
-            else (request.source_file or 'Unknown')
+        job_id = str(uuid.uuid4())
+        _jobs[job_id] = {"status": "pending", "result": None, "error": None, "analysis_id": None}
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(
+            _executor, _run_analysis_job,
+            job_id, log_dicts, request.resource_id, request.source_file, request.analysis_type
         )
-        session = LogSession(
-            name=resource_name,
-            source_type='pod' if request.resource_id else 'file',
-            resource_id=request.resource_id,
-            analysis_id=log_analysis.id,
-            entry_count=len(log_entries),
-            severity=severity
-        )
-        db.add(session)
-        db.commit()
 
-        return log_analysis
-        
+        return AnalysisJobResponse(job_id=job_id, status="pending")
+
     except HTTPException:
         raise
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to start analysis: {str(e)}")
+
+
+@router.get("/jobs/{job_id}", response_model=AnalysisJobResponse)
+def get_job_status(job_id: str):
+    """Poll an async analysis job for its current status and result."""
+    if job_id not in _jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = _jobs[job_id]
+    result = None
+    if job.get("result"):
+        result = LogAnalysisResponse(**job["result"])
+    return AnalysisJobResponse(
+        job_id=job_id,
+        status=job["status"],
+        result=result,
+        error=job.get("error"),
+    )
 
 
 @router.get("/analysis/{analysis_id}", response_model=LogAnalysisResponse)
