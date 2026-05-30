@@ -1,287 +1,289 @@
-# K8s Log Analytics
+﻿# K8s Log Analytics
 
-A web application for analyzing Kubernetes cluster logs using AI-powered anomaly detection and LLM-based analysis.
+> AI-powered Kubernetes log analysis platform — upload log files or connect live to your cluster, get structured diagnostics, root-cause analysis, and actionable kubectl remediation commands in seconds.
+
+---
 
 ## Features
 
-- **File Upload**: Upload log files through the GUI for immediate analysis
-- **Real-time Collection**: Collect logs directly from your Kubernetes cluster
-- **AI-Powered Analysis**: LLM-based anomaly detection and resolution suggestions
-- **Interactive Dashboard**: Visualize log metrics, errors, and trends
-- **Resource Browser**: Browse logs by namespace, pod, and container
-- **Smart Filtering**: Filter logs by level, timestamp, and resource
-- **Storage**: Persistent log storage with PostgreSQL
+| Capability | Detail |
+|---|---|
+| **File Upload** | Upload `.log` files through the GUI for immediate AI analysis |
+| **Live K8s Cluster** | Browse namespaces, pods, and containers; stream logs via `kubectl` |
+| **AI Analysis** | Azure OpenAI (GPT) detects anomalies, root causes, and generates `kubectl` fixes |
+| **Smart Condensation** | Normalises and deduplicates log patterns before sending to LLM — up to 90% token reduction |
+| **Async Jobs** | Analysis runs in a background thread pool; frontend polls non-blocking job status |
+| **Session History** | Every analysis auto-saved; restore any previous result without re-running LLM |
+| **Dashboard** | Log-level pie chart, top-resource bar chart, and session browser with severity badges |
+| **Graceful Fallback** | Rule-based analyser (CrashLoopBackOff, OOMKilled, ImagePullBackOff…) when LLM is unavailable |
+
+---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Frontend (React + TypeScript)            │
-│  - File upload interface                                     │
-│  - Real-time log browser (namespace/pod/service selection)  │
-│  - Analysis results dashboard                                │
-│  - Filters (log level, timestamp, keywords)                 │
-└────────────────────────┬────────────────────────────────────┘
-                         │ HTTP/WebSocket
-┌────────────────────────▼────────────────────────────────────┐
-│              Backend API (FastAPI + Python)                  │
-│  - /api/upload-log - File upload endpoint                   │
-│  - /api/logs/{namespace}/{pod} - Fetch stored logs          │
-│  - /api/analyze - Trigger LLM analysis                      │
-│  - /api/resources - List K8s resources                      │
-│  - Background task: Log collector (polls K8s API)          │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-         ┌───────────────┼───────────────┐
-         │               │               │
-┌────────▼────────┐ ┌───▼────────┐ ┌────▼────────────┐
-│  PostgreSQL     │ │  Redis   │ │  LLM API        │
-│  (Parsed logs) │ │  (Cache)  │ │  (Gemini AI)    │
-└─────────────────┘ └────────────┘ └─────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                    Browser  (localhost:8080)                     │
+│                                                                  │
+│  ┌──────────────┐  ┌────────────────────┐  ┌────────────────┐  │
+│  │  Upload Page  │  │  Cluster Browser   │  │   Dashboard    │  │
+│  │  (file drop)  │  │  (namespace/pod)   │  │  (charts +     │  │
+│  └──────┬───────┘  └────────┬───────────┘  │   sessions)    │  │
+│         │                   │              └───────┬────────┘  │
+│         └───────────────────┴──────────────────────┘           │
+│                   React + TypeScript + Tailwind                  │
+│                   Vite · Recharts · React Router                 │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │ HTTP  (port 8000)
+┌──────────────────────────▼──────────────────────────────────────┐
+│                 FastAPI Backend  (localhost:8000)                 │
+│                                                                  │
+│  POST /api/logs/upload          ← file upload + parse           │
+│  POST /api/logs/analyze         ← trigger async LLM job         │
+│  GET  /api/logs/jobs/{id}       ← poll job status               │
+│  GET  /api/logs/sessions        ← session history               │
+│  GET  /api/k8s/namespaces       ← list namespaces via kubectl   │
+│  GET  /api/k8s/pods/{ns}        ← list pods                     │
+│  GET  /api/k8s/logs/{ns}/{pod}  ← stream pod logs               │
+│                                                                  │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────────┐ │
+│  │  LogParser  │  │ K8sCollector │  │    LLMLogAnalyzer      │ │
+│  │  (regex)    │  │  (kubectl    │  │  ┌──────────────────┐  │ │
+│  └─────────────┘  │  subprocess) │  │  │ condense context │  │ │
+│                   └──────────────┘  │  │ → Azure OpenAI   │  │ │
+│                                     │  │ → fallback rules │  │ │
+│  ThreadPoolExecutor (4 workers)     │  └──────────────────┘  │ │
+│  _jobs dict  (in-memory job store)  └────────────────────────┘ │
+└──────────────┬──────────────────────────────────────────────────┘
+               │
+   ┌───────────┴───────────┐
+   │                       │
+┌──▼──────────────┐  ┌─────▼──────────┐
+│   PostgreSQL    │  │     Redis      │
+│  (logs, anal-   │  │   (cache /     │
+│   yses, sess.)  │  │    optional)   │
+│   port 5432     │  │   port 6379    │
+└─────────────────┘  └────────────────┘
+        ▲
+        │ kubeconfig mount
+┌───────┴──────────────────┐
+│  Kubernetes Cluster      │
+│  (kubectl + kubeconfig)  │
+└──────────────────────────┘
 ```
+
+### Container Map (Docker Compose)
+
+| Container | Image | Host Port | Internal Port |
+|---|---|---|---|
+| `k8s-log-analytics-frontend` | Custom (Nginx) | **8080** | 80 |
+| `k8s-log-analytics-backend` | Custom (Python 3.11) | **8000** | 8000 |
+| `k8s-log-analytics-db` | postgres:15-alpine | 5432 | 5432 |
+| `k8s-log-analytics-redis` | redis:7-alpine | — | 6379 |
+
+---
+
+## Tech Stack
+
+**Backend** — Python 3.11, FastAPI, SQLAlchemy 2, PostgreSQL, Azure OpenAI SDK, `kubectl` subprocess
+
+**Frontend** — React 18, TypeScript, Vite, Tailwind CSS, Recharts, React Router, Lucide Icons
+
+**Infrastructure** — Docker, Docker Compose, Nginx (frontend static serving + proxy)
+
+---
 
 ## Prerequisites
 
-- Docker and Docker Compose
-- Kubernetes cluster (for real-time log collection)
-- Google Gemini API Key (optional, for AI-powered analysis)
-- kubectl configured (for cluster access)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (includes Docker Compose)
+- Azure OpenAI resource with a deployed model *(optional — fallback analyser works without it)*
+- `kubectl` configured with a valid `kubeconfig` *(optional — required only for live cluster browsing)*
 
-## Quick Start
+---
 
-### 1. Clone the Repository
+## Quick Start (Docker — recommended)
 
-```bash
-cd k8s-log-analytics
-```
-
-### 2. Configure Environment Variables
+### 1. Clone the repo
 
 ```bash
-cp .env.example .env
+git clone <repo-url>
+cd Log_Analyzer
 ```
 
-Edit `.env` and add your Google Gemini API key:
+### 2. Configure environment
+
+Create a `.env` file in the project root:
 
 ```env
-GEMINI_API_KEY=your-actual-api-key-here
+# Azure OpenAI  (leave blank to use rule-based fallback)
+AZURE_OPENAI_ENDPOINT=https://<your-resource>.openai.azure.com/
+AZURE_OPENAI_API_KEY=<your-api-key>
+AZURE_OPENAI_DEPLOYMENT=gpt-5.4
+AZURE_OPENAI_API_VERSION=2024-12-01-preview
+
+# Optional overrides
+AZURE_OPENAI_TEMPERATURE=0.1
+AZURE_OPENAI_MAX_TOKENS=100000
 ```
 
-> **Note**: For detailed instructions on getting your Gemini API key, see [GEMINI_SETUP.md](GEMINI_SETUP.md)
-
-### 3. Start the Application
+### 3. Build and run
 
 ```bash
-docker-compose up -d
+docker compose up -d --build
 ```
 
-This will start:
-- PostgreSQL database (port 5432)
-- Redis cache (port 6379)
-- Backend API (port 8000)
-- Frontend web interface (port 8080)
+### 4. Open the app
 
-### 4. Access the Application
+| Service | URL |
+|---|---|
+| **Frontend** | http://localhost:8080 |
+| **Backend API** | http://localhost:8000 |
+| **API Docs (Swagger)** | http://localhost:8000/docs |
+| **Health check** | http://localhost:8000/health |
 
-Open your browser and navigate to: `http://localhost:8080`
+### 5. Stop
 
-## Usage
-
-### Upload Log Files
-
-1. Navigate to the **Upload** tab
-2. Click to select a log file (.log, .txt)
-3. Click "Upload & Analyze"
-4. View AI-powered analysis results
-
-### Browse Cluster Logs
-
-1. Navigate to the **Cluster** tab
-2. View cluster health overview
-3. Select a namespace
-4. Expand a pod to view logs
-5. Click "Analyze" for AI-powered insights
-
-### View Analytics Dashboard
-
-1. Navigate to the **Dashboard** tab
-2. View log statistics and metrics
-3. Filter by resource or log level
-4. Explore visualizations
-
-## API Documentation
-
-Once the application is running, visit:
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
-
-### Key Endpoints
-
-- `POST /api/logs/upload` - Upload a log file for analysis
-- `GET /api/logs/entries` - Retrieve log entries with filters
-- `POST /api/logs/analyze` - Trigger LLM analysis
-- `GET /api/k8s/health` - Get cluster health
-- `GET /api/k8s/pods/{namespace}` - List pods in namespace
-- `GET /api/k8s/logs/{namespace}/{pod}` - Get pod logs
-
-## Configuration
-
-### Backend Configuration
-
-Edit `backend/.env`:
-
-```env
-DATABASE_URL=postgresql://loguser:logpass@postgres:5432/loganalytics
-REDIS_URL=redis://redis:6379/0
-GEMINI_API_KEY=your-gemini-api-key
-KUBECONFIG=/path/to/kubeconfig
-LOG_RETENTION_DAYS=30
+```bash
+docker compose down
+# To also remove volumes (wipes the database):
+docker compose down -v
 ```
 
-### Kubernetes Access
+---
 
-For real-time log collection, ensure:
+## Local Development Setup
 
-1. Your kubeconfig is mounted in the backend container
-2. The backend has permissions to access pod logs
-3. ServiceAccount with appropriate RBAC is configured
-
-### Without Gemini API
-
-The application includes a fallback rule-based analysis when Gemini is not configured. It will still provide:
-- Basic error counting
-- Common error pattern detection
-- Generic troubleshooting suggestions
-
-## Development
-
-### Backend Development
+### Backend
 
 ```bash
 cd backend
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# macOS / Linux
+source .venv/bin/activate
+
 pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# Set env vars (or create a .env in backend/)
+set AZURE_OPENAI_ENDPOINT=...
+set AZURE_OPENAI_API_KEY=...
+set DATABASE_URL=sqlite:///./logs.db   # use SQLite for local dev
+
+uvicorn app.main:app --reload --port 8000
 ```
 
-### Frontend Development
+### Frontend
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev   # starts on http://localhost:5173
 ```
 
-### Running Tests
+> The Vite dev server proxies `/api` to `http://localhost:8000` automatically.
 
-```bash
-# Backend tests
-cd backend
-pytest
+---
 
-# Frontend tests
-cd frontend
-npm test
+## Kubernetes Cluster Access
+
+The backend mounts your local `~/.kube/config` into the container read-only:
+
+```yaml
+volumes:
+  - ~/.kube/config:/kubeconfig/config:ro
 ```
 
-## Docker Commands
+**Docker Desktop Kubernetes** (built-in cluster) works out of the box.
+For a remote cluster, make sure `kubectl get nodes` succeeds on your host before starting containers.
 
-```bash
-# Build and start all services
-docker-compose up -d
+To disable cluster features entirely, remove the `KUBECONFIG` env var from `docker-compose.yml`.
 
-# View logs
-docker-compose logs -f
+---
 
-# Stop services
-docker-compose down
+## Project Structure
 
-# Rebuild after changes
-docker-compose up -d --build
-
-# Remove all data (including database)
-docker-compose down -v
+```
+Log_Analyzer/
+├── docker-compose.yml
+├── .env                        # your secrets (not committed)
+├── README.md
+├── docs/                       # supplementary notes and fix logs
+│
+├── backend/
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   └── app/
+│       ├── main.py             # FastAPI app, CORS, router registration
+│       ├── api/
+│       │   ├── logs.py         # upload, analyze, job polling, sessions
+│       │   └── kubernetes.py   # namespace, pod, log endpoints
+│       ├── core/
+│       │   ├── config.py       # Pydantic settings (reads .env)
+│       │   └── database.py     # SQLAlchemy engine + session factory
+│       ├── models/
+│       │   ├── log.py          # ORM models: LogEntry, K8sResource, LogAnalysis, LogSession
+│       │   └── schemas.py      # Pydantic request/response schemas
+│       └── services/
+│           ├── log_parser.py   # Regex-based multi-format log parser
+│           ├── k8s_collector.py# kubectl subprocess wrapper
+│           └── llm_analyzer.py # LLM analysis, context condensation, fallback
+│
+└── frontend/
+    ├── Dockerfile
+    ├── nginx.conf
+    ├── index.html
+    └── src/
+        ├── App.tsx             # App shell, nav, live status bar
+        ├── context/
+        │   └── AnalysisContext.tsx  # Global async job tracker
+        ├── pages/
+        │   ├── UploadPage.tsx
+        │   ├── ClusterBrowserPage.tsx
+        │   └── DashboardPage.tsx
+        ├── services/
+        │   └── api.ts          # Typed API client
+        └── types/
+            └── index.ts
 ```
 
-## Troubleshooting
+---
 
-### Backend fails to start
+## Environment Variables Reference
 
-- Check database connection: `docker-compose logs postgres`
-- Verify environment variables in `.env`
-- Check for port conflicts
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `AZURE_OPENAI_ENDPOINT` | No | — | Azure OpenAI resource endpoint |
+| `AZURE_OPENAI_API_KEY` | No | — | Azure OpenAI API key |
+| `AZURE_OPENAI_DEPLOYMENT` | No | `gpt-5.4` | Deployed model name |
+| `AZURE_OPENAI_API_VERSION` | No | `2024-12-01-preview` | API version |
+| `DATABASE_URL` | Yes | `sqlite:///./logs.db` | SQLAlchemy DB URL |
+| `REDIS_URL` | No | `redis://localhost:6379/0` | Redis URL |
+| `KUBECONFIG` | No | — | Path to kubeconfig inside container |
+| `LOG_RETENTION_DAYS` | No | `30` | Days before log cleanup |
 
-### Cannot connect to Kubernetes cluster
+---
 
-- Ensure kubeconfig is mounted correctly
-- Verify cluster connectivity from within container
-- Check RBAC permissions
+## API Quick Reference
 
-### Frontend shows connection errors
+```
+GET  /health                              → liveness check
+GET  /docs                                → Swagger UI
 
-- Ensure backend is running: `docker-compose ps`
-- Check API proxy configuration in nginx
-- Verify CORS settings
+POST /api/logs/upload                     → upload .log file
+POST /api/logs/analyze                    → start async analysis job → { job_id }
+GET  /api/logs/jobs/{job_id}              → poll job status + result
+GET  /api/logs/sessions                   → list all saved sessions
+GET  /api/logs/entries/{resource_id}      → paginated log entries
 
-### Gemini analysis fails
+GET  /api/k8s/health                      → cluster health summary
+GET  /api/k8s/namespaces                  → list namespaces
+GET  /api/k8s/pods/{namespace}            → list pods
+GET  /api/k8s/logs/{namespace}/{pod}      → fetch + optionally store pod logs
+```
 
-- Verify API key is set correctly
-- Check Gemini API quota and billing
-- Review backend logs for specific errors
+---
 
-## Architecture Details
+## Supplementary Docs
 
-### Log Processing Pipeline
-
-1. **Ingestion**: Logs are collected via file upload or K8s API
-2. **Parsing**: Log parser extracts timestamp, level, and message
-3. **Storage**: Parsed logs stored in PostgreSQL
-4. **Analysis**: LLM analyzes logs for anomalies and patterns
-5. **Visualization**: Results displayed in dashboard
-
-### Technology Stack
-
-- **Frontend**: React 18, TypeScript, Tailwind CSS, Recharts
-- **Backend**: FastAPI, Python 3.11, SQLAlchemy
-- **Database**: PostgreSQL 15
-- **Cache**: Redis 7
-- **AI**: Google Gemini (optional)
-- **Container**: Docker, Docker Compose
-- **Orchestration**: Kubernetes API client
-
-## Security Considerations
-
-- Store API keys in environment variables
-- Use HTTPS in production
-- Implement authentication/authorization
-- Restrict Kubernetes access with RBAC
-- Regular security updates for dependencies
-
-## Future Enhancements
-
-- [ ] User authentication and authorization
-- [ ] Real-time log streaming with WebSocket
-- [ ] Alert notifications for critical errors
-- [ ] Historical trend analysis
-- [ ] Integration with Prometheus/Grafana
-- [ ] Multi-cluster support
-- [ ] Custom analysis rules
-- [ ] Export analysis reports
-
-## License
-
-MIT License
-
-## Support
-
-For issues and questions:
-- Create an issue in the repository
-- Check existing documentation
-- Review API docs at `/docs` endpoint
-
-## Acknowledgments
-
-- Built with FastAPI and React
-- Powered by OpenAI GPT-4 for analysis
-- Kubernetes client for cluster integration
+All implementation notes, fix logs, and migration guides are in [`docs/`](docs/).
