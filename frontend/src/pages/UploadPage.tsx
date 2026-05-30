@@ -115,7 +115,7 @@ const UploadPage: React.FC = () => {
   const sc = analysis ? (severityColors[analysis.severity] ?? severityColors['Healthy']) : null;
 
   const Section: React.FC<{ icon: React.ReactNode; title: string; accent: string; items: string[] }> = ({ icon, title, accent, items }) => (
-    <div className="bg-gray-900/60 border border-gray-700 rounded-xl p-5">
+    <div className="bg-zinc-950/60 border border-zinc-800 rounded-xl p-5">
       <h3 className={`flex items-center gap-2 font-semibold mb-3 ${accent}`}>
         {icon}
         {title}
@@ -136,7 +136,7 @@ const UploadPage: React.FC = () => {
     <div className="space-y-6 max-w-4xl mx-auto">
 
       {/* Page Header */}
-      <div className="flex flex-col gap-1.5 pb-5 border-b border-gray-700/50">
+      <div className="flex flex-col gap-1.5 pb-5 border-b border-zinc-800/50">
         <h1 className="text-3xl font-extrabold text-white tracking-tight">Upload Log File</h1>
         <p className="text-gray-400 text-sm">Upload a log file for AI-powered anomaly detection and DevOps analysis</p>
       </div>
@@ -163,10 +163,10 @@ const UploadPage: React.FC = () => {
                 ? 'border-blue-500 bg-blue-900/10 scale-[1.01]'
                 : file
                   ? 'border-green-600 bg-green-900/10'
-                  : 'border-gray-600 bg-gray-800/50 hover:border-blue-500 hover:bg-blue-900/5'
+                  : 'border-zinc-700 bg-zinc-900/50 hover:border-blue-500 hover:bg-blue-900/5'
               }`}
           >
-            <div className={`p-4 rounded-full ${dragOver ? 'bg-blue-500/20' : file ? 'bg-green-500/15' : 'bg-gray-700/60'}`}>
+            <div className={`p-4 rounded-full ${dragOver ? 'bg-blue-500/20' : file ? 'bg-green-500/15' : 'bg-zinc-800/60'}`}>
               {file
                 ? <CheckCircle className="h-10 w-10 text-green-400" />
                 : <UploadCloud className={`h-10 w-10 ${dragOver ? 'text-blue-400' : 'text-gray-500'}`} />
@@ -202,7 +202,7 @@ const UploadPage: React.FC = () => {
             <button
               onClick={handleUpload}
               disabled={phase === 'uploading'}
-              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white font-semibold py-3.5 px-4 rounded-xl transition-colors flex items-center justify-center gap-2.5 text-base"
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-zinc-800 disabled:text-gray-500 text-white font-semibold py-3.5 px-4 rounded-xl transition-colors flex items-center justify-center gap-2.5 text-base"
             >
               {phase === 'uploading' ? (
                 <><Loader2 className="animate-spin h-5 w-5" /> Uploading file…</>
@@ -215,7 +215,7 @@ const UploadPage: React.FC = () => {
           {!file && (
             <label
               htmlFor="file-upload"
-              className="w-full flex items-center justify-center gap-2 py-3 border border-gray-600 hover:border-blue-500 text-gray-400 hover:text-blue-300 rounded-xl transition-colors text-sm font-medium cursor-pointer"
+              className="w-full flex items-center justify-center gap-2 py-3 border border-zinc-700 hover:border-blue-500 text-gray-400 hover:text-blue-300 rounded-xl transition-colors text-sm font-medium cursor-pointer"
             >
               <FileText className="h-4 w-4" /> Browse and select a file
             </label>
@@ -252,7 +252,7 @@ const UploadPage: React.FC = () => {
           <button
             onClick={handleAnalyze}
             disabled={phase === 'analyzing'}
-            className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:text-gray-500 text-white font-semibold py-4 px-4 rounded-xl transition-colors flex items-center justify-center gap-2.5 text-base shadow-lg shadow-purple-900/30"
+            className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-zinc-800 disabled:text-gray-500 text-white font-semibold py-4 px-4 rounded-xl transition-colors flex items-center justify-center gap-2.5 text-base shadow-lg shadow-purple-900/30"
           >
             {phase === 'analyzing' ? (
               <><Loader2 className="animate-spin h-5 w-5" />
@@ -265,10 +265,10 @@ const UploadPage: React.FC = () => {
 
           {/* Analyzing progress steps */}
           {phase === 'analyzing' && (
-            <div className="bg-gray-800/60 border border-gray-700 rounded-xl p-4 flex items-center gap-3">
+            <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-4 flex items-center gap-3">
               <div className="flex gap-1 shrink-0">
                 {['Uploading', 'Processing', 'Analysing', 'Done'].map((_, i) => (
-                  <span key={i} className={`h-1.5 w-6 rounded-full ${i < 3 ? 'bg-purple-500 animate-pulse' : 'bg-gray-700'}`} />
+                  <span key={i} className={`h-1.5 w-6 rounded-full ${i < 3 ? 'bg-purple-500 animate-pulse' : 'bg-zinc-800'}`} />
                 ))}
               </div>
               <p className="text-gray-400 text-sm">
@@ -281,7 +281,7 @@ const UploadPage: React.FC = () => {
           {phase !== 'analyzing' && (
             <button
               onClick={handleReset}
-              className="w-full flex items-center justify-center gap-2 py-2.5 border border-gray-700 hover:border-gray-500 text-gray-500 hover:text-gray-300 rounded-xl transition-colors text-sm"
+              className="w-full flex items-center justify-center gap-2 py-2.5 border border-zinc-800 hover:border-gray-500 text-gray-500 hover:text-gray-300 rounded-xl transition-colors text-sm"
             >
               <RotateCcw className="h-3.5 w-3.5" /> Upload a different file
             </button>
@@ -325,7 +325,7 @@ const UploadPage: React.FC = () => {
             </button>
             <button
               onClick={handleReset}
-              className="flex items-center justify-center gap-2 border border-gray-600 hover:border-gray-400 text-gray-400 hover:text-white py-3 px-4 rounded-xl transition-colors text-sm font-medium"
+              className="flex items-center justify-center gap-2 border border-zinc-700 hover:border-gray-400 text-gray-400 hover:text-white py-3 px-4 rounded-xl transition-colors text-sm font-medium"
             >
               <RotateCcw className="h-4 w-4" /> Upload Another File
             </button>
@@ -348,11 +348,11 @@ const UploadPage: React.FC = () => {
 
           {/* Health Assessment */}
           {analysis.health_assessment && (
-            <div className="bg-gray-800 border border-gray-700 rounded-xl p-5">
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
               <h3 className="flex items-center gap-2 font-semibold text-blue-300 mb-3">
                 <Activity className="h-4 w-4" /> Health Assessment
               </h3>
-              <p className="text-gray-300 text-sm leading-relaxed bg-gray-900/60 rounded-lg p-4">
+              <p className="text-gray-300 text-sm leading-relaxed bg-zinc-950/60 rounded-lg p-4">
                 {analysis.health_assessment}
               </p>
             </div>
@@ -393,7 +393,7 @@ const UploadPage: React.FC = () => {
             </button>
             <button
               onClick={handleReset}
-              className="flex items-center justify-center gap-2 border border-gray-600 hover:border-gray-400 text-gray-400 hover:text-white py-3 px-4 rounded-xl transition-colors text-sm font-medium"
+              className="flex items-center justify-center gap-2 border border-zinc-700 hover:border-gray-400 text-gray-400 hover:text-white py-3 px-4 rounded-xl transition-colors text-sm font-medium"
             >
               <RotateCcw className="h-4 w-4" /> Upload Another File
             </button>

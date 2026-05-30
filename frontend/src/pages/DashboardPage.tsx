@@ -212,7 +212,7 @@ const DashboardPage: React.FC = () => {
       case 'warning':  return 'bg-yellow-900/60 text-yellow-300 border-yellow-700';
       case 'low':
       case 'normal':   return 'bg-green-900/60 text-green-300 border-green-700';
-      default:         return 'bg-gray-700 text-gray-300 border-gray-600';
+      default:         return 'bg-zinc-800 text-gray-300 border-zinc-700';
     }
   };
 
@@ -233,7 +233,7 @@ const DashboardPage: React.FC = () => {
   const CustomBarTooltip = ({ active, payload }: any) => {
     if (active && payload?.length) {
       return (
-        <div className="bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm">
+        <div className="bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm">
           <p className="text-white font-medium">{payload[0].payload.fullName}</p>
           <p className="text-blue-400">{payload[0].value} entries</p>
         </div>
@@ -246,7 +246,7 @@ const DashboardPage: React.FC = () => {
     if (active && payload?.length) {
       const total = levelChartData.reduce((s, d) => s + d.count, 0);
       return (
-        <div className="bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm">
+        <div className="bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm">
           <p style={{ color: payload[0].payload.fill }} className="font-semibold">{payload[0].name}</p>
           <p className="text-white">{payload[0].value} entries ({((payload[0].value / total) * 100).toFixed(1)}%)</p>
         </div>
@@ -278,8 +278,8 @@ const DashboardPage: React.FC = () => {
     <div className="flex gap-6 items-start w-full">
 
       {/* ── LEFT SIDEBAR: Session History ── */}
-      <aside className="w-72 shrink-0 self-start sticky top-6 rounded-xl border border-gray-700/80 overflow-hidden flex flex-col shadow-lg" style={{ background: '#0b1120', maxHeight: 'calc(100vh - 6rem)' }}>
-        <div className="px-4 py-4 border-b border-gray-700 flex items-center justify-between">
+      <aside className="w-72 shrink-0 self-start sticky top-6 rounded-xl border border-white/[0.06] overflow-hidden flex flex-col shadow-lg" style={{ background: '#0a0a0a', maxHeight: 'calc(100vh - 6rem)' }}>
+        <div className="px-4 py-4 border-b border-zinc-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <History className="h-4 w-4 text-purple-400" />
             <span className="text-sm font-semibold text-gray-200 uppercase tracking-wide">Sessions</span>
@@ -307,7 +307,7 @@ const DashboardPage: React.FC = () => {
                 const isExpanded = expandedGroupName === name;
 
                 return (
-                  <div key={name} className={`transition-colors ${isExpanded ? 'bg-gray-800/60' : 'hover:bg-gray-800/30'}`}>
+                  <div key={name} className={`transition-colors ${isExpanded ? 'bg-zinc-900/60' : 'hover:bg-zinc-900/30'}`}>
                     {/* Group header */}
                     <div className="px-3 py-3 flex items-start gap-2">
                       <div className="mt-0.5 shrink-0">
@@ -344,7 +344,7 @@ const DashboardPage: React.FC = () => {
                             <button onClick={() => handleDeleteGroup(name)}
                               className="text-xs bg-red-600 hover:bg-red-700 text-white px-1.5 py-0.5 rounded">All</button>
                             <button onClick={() => setConfirmDeleteGroupName(null)}
-                              className="text-xs bg-gray-600 hover:bg-gray-500 text-white px-1.5 py-0.5 rounded">✕</button>
+                              className="text-xs bg-zinc-700 hover:bg-zinc-600 text-white px-1.5 py-0.5 rounded">✕</button>
                           </div>
                         ) : (
                           <button onClick={() => setConfirmDeleteGroupName(name)}
@@ -357,9 +357,9 @@ const DashboardPage: React.FC = () => {
 
                     {/* Executions list */}
                     {isExpanded && (
-                      <div className="border-t border-gray-700/60 bg-gray-900/50 divide-y divide-gray-800/60">
+                      <div className="border-t border-zinc-800/60 bg-zinc-950/50 divide-y divide-gray-800/60">
                         {group.map((session, idx) => (
-                          <div key={session.id} className="px-3 py-2 flex items-center gap-2 hover:bg-gray-800/40 transition-colors">
+                          <div key={session.id} className="px-3 py-2 flex items-center gap-2 hover:bg-zinc-900/40 transition-colors">
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-1.5">
                                 <span className="text-xs font-semibold text-gray-400">#{count - idx}</span>
@@ -393,7 +393,7 @@ const DashboardPage: React.FC = () => {
                                     {deletingSessionId === session.id ? '…' : 'Y'}
                                   </button>
                                   <button onClick={() => setConfirmDeleteSessionId(null)}
-                                    className="text-xs bg-gray-600 text-white px-1 py-0.5 rounded">N</button>
+                                    className="text-xs bg-zinc-700 text-white px-1 py-0.5 rounded">N</button>
                                 </div>
                               ) : (
                                 <button onClick={() => setConfirmDeleteSessionId(session.id)}
@@ -416,7 +416,7 @@ const DashboardPage: React.FC = () => {
 
       {/* ── MAIN CONTENT ── */}
       <main className="flex-1 min-w-0 space-y-6">
-        <div className="flex flex-col gap-1.5 pb-5 border-b border-gray-700/50">
+        <div className="flex flex-col gap-1.5 pb-5 border-b border-zinc-800/50">
           <h1 className="text-3xl font-extrabold text-white tracking-tight">Analytics Dashboard</h1>
           <p className="text-gray-400 text-sm">Monitor log analytics, anomalies and resource health metrics</p>
         </div>
@@ -429,8 +429,8 @@ const DashboardPage: React.FC = () => {
         )}
 
         {/* Filters & Resources */}
-        <div className="bg-gray-800/70 rounded-xl border border-gray-700 overflow-hidden shadow-md">
-          <div className="px-6 py-3.5 border-b border-gray-700 flex items-center gap-2 bg-gray-800">
+        <div className="bg-zinc-900/70 rounded-xl border border-zinc-800 overflow-hidden shadow-md">
+          <div className="px-6 py-3.5 border-b border-zinc-800 flex items-center gap-2 bg-zinc-900">
             <Filter className="h-4 w-4 text-blue-400" />
             <h2 className="text-sm font-semibold text-gray-200 uppercase tracking-wider">Filters &amp; Resources</h2>
           </div>
@@ -438,10 +438,10 @@ const DashboardPage: React.FC = () => {
             {/* Scrollable resource list */}
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Resource</label>
-              <div className="border border-gray-600 rounded-lg bg-gray-900 overflow-y-auto" style={{ maxHeight: '11rem' }}>
+              <div className="border border-zinc-700 rounded-lg bg-zinc-950 overflow-y-auto" style={{ maxHeight: '11rem' }}>
                 <div
-                  className={`flex items-center gap-2 px-3 py-2 cursor-pointer border-b border-gray-700/60 transition-colors ${
-                    selectedResource === null ? 'bg-blue-600/20 text-blue-300' : 'text-gray-400 hover:bg-gray-700/50 hover:text-gray-200'
+                  className={`flex items-center gap-2 px-3 py-2 cursor-pointer border-b border-zinc-800/60 transition-colors ${
+                    selectedResource === null ? 'bg-blue-600/20 text-blue-300' : 'text-gray-400 hover:bg-zinc-800/50 hover:text-gray-200'
                   }`}
                   onClick={() => setSelectedResource(null)}
                 >
@@ -451,8 +451,8 @@ const DashboardPage: React.FC = () => {
                 {resources.map((resource) => (
                   <div
                     key={resource.id}
-                    className={`group flex items-center justify-between px-3 py-2 border-b border-gray-700/40 last:border-0 transition-colors ${
-                      selectedResource === resource.id ? 'bg-blue-600/20' : 'hover:bg-gray-700/50'
+                    className={`group flex items-center justify-between px-3 py-2 border-b border-zinc-800/40 last:border-0 transition-colors ${
+                      selectedResource === resource.id ? 'bg-blue-600/20' : 'hover:bg-zinc-800/50'
                     }`}
                   >
                     <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setSelectedResource(resource.id)}>
@@ -468,7 +468,7 @@ const DashboardPage: React.FC = () => {
                           {deletingId === resource.id ? '…' : 'Yes'}
                         </button>
                         <button onClick={() => setConfirmDeleteId(null)}
-                          className="text-xs bg-gray-600 hover:bg-gray-500 text-white px-2 py-0.5 rounded font-medium">
+                          className="text-xs bg-zinc-700 hover:bg-zinc-600 text-white px-2 py-0.5 rounded font-medium">
                           No
                         </button>
                       </div>
@@ -492,7 +492,7 @@ const DashboardPage: React.FC = () => {
               <select
                 value={selectedLevel || ''}
                 onChange={(e) => setSelectedLevel(e.target.value || null)}
-                className="w-full bg-gray-900 text-gray-200 rounded-lg px-3 py-2 border border-gray-600 focus:outline-none focus:border-blue-500 text-sm h-9"
+                className="w-full bg-zinc-950 text-gray-200 rounded-lg px-3 py-2 border border-zinc-700 focus:outline-none focus:border-blue-500 text-sm h-9"
               >
                 <option value="">All Levels</option>
                 <option value="DEBUG">DEBUG</option>
@@ -506,7 +506,7 @@ const DashboardPage: React.FC = () => {
                   { label: 'Errors', count: entries.filter(e => e.level === 'ERROR' || e.level === 'CRITICAL').length, color: 'text-red-400' },
                   { label: 'Warnings', count: entries.filter(e => e.level === 'WARNING').length, color: 'text-yellow-400' },
                 ].map(({ label, count, color }) => (
-                  <div key={label} className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-center">
+                  <div key={label} className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-center">
                     <p className={`text-lg font-bold ${color}`}>{count}</p>
                     <p className="text-xs text-gray-500">{label}</p>
                   </div>
@@ -524,7 +524,7 @@ const DashboardPage: React.FC = () => {
                     <button
                       onClick={() => selectedResource && handleAnalyze(selectedResource)}
                       disabled={!selectedResource || isAnalyzing}
-                      className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:text-gray-500 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm h-9"
+                      className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-zinc-800 disabled:text-gray-500 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm h-9"
                     >
                       {isAnalyzing ? (
                         <><Loader2 className="animate-spin h-4 w-4" />Analyzing…</>
@@ -549,7 +549,7 @@ const DashboardPage: React.FC = () => {
 
         {/* Summary Cards */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-        <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 flex items-center gap-4 shadow-sm hover:border-blue-600/50 transition-colors">
+        <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-5 flex items-center gap-4 shadow-sm hover:border-blue-600/50 transition-colors">
           <div className="rounded-lg p-3 bg-blue-500/10 border border-blue-500/20 shrink-0">
             <BarChart3 className="h-6 w-6 text-blue-400" />
           </div>
@@ -558,7 +558,7 @@ const DashboardPage: React.FC = () => {
             <p className="text-3xl font-bold text-white leading-none mt-1">{entries.length}</p>
           </div>
         </div>
-        <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 flex items-center gap-4 shadow-sm hover:border-red-600/50 transition-colors">
+        <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-5 flex items-center gap-4 shadow-sm hover:border-red-600/50 transition-colors">
           <div className="rounded-lg p-3 bg-red-500/10 border border-red-500/20 shrink-0">
             <AlertCircle className="h-6 w-6 text-red-400" />
           </div>
@@ -569,7 +569,7 @@ const DashboardPage: React.FC = () => {
             </p>
           </div>
         </div>
-        <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 flex items-center gap-4 shadow-sm hover:border-yellow-600/50 transition-colors">
+        <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-5 flex items-center gap-4 shadow-sm hover:border-yellow-600/50 transition-colors">
           <div className="rounded-lg p-3 bg-yellow-500/10 border border-yellow-500/20 shrink-0">
             <TrendingUp className="h-6 w-6 text-yellow-400" />
           </div>
@@ -580,7 +580,7 @@ const DashboardPage: React.FC = () => {
             </p>
           </div>
         </div>
-        <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 flex items-center gap-4 shadow-sm hover:border-green-600/50 transition-colors">
+        <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-5 flex items-center gap-4 shadow-sm hover:border-green-600/50 transition-colors">
           <div className="rounded-lg p-3 bg-green-500/10 border border-green-500/20 shrink-0">
             <PieChart className="h-6 w-6 text-green-400" />
           </div>
@@ -594,7 +594,7 @@ const DashboardPage: React.FC = () => {
       {/* Charts */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Log Level Distribution - Donut chart with legend */}
-        <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 shadow-sm">
+        <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-5 shadow-sm">
           <h2 className="text-base font-semibold text-white mb-4 flex items-center gap-2"><PieChart className="h-4 w-4 text-purple-400" />Log Level Distribution</h2>
           {levelChartData.length > 0 ? (
             <ResponsiveContainer width="100%" height={360}>
@@ -630,7 +630,7 @@ const DashboardPage: React.FC = () => {
         </div>
 
         {/* Log Entries per Resource - horizontal or vertical bar with angled labels */}
-        <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 shadow-sm">
+        <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-5 shadow-sm">
           <h2 className="text-base font-semibold text-white mb-4 flex items-center gap-2"><BarChart3 className="h-4 w-4 text-blue-400" />Log Entries per Resource</h2>
           {resourceChartData.length > 0 ? (
             <ResponsiveContainer width="100%" height={360}>
@@ -671,8 +671,8 @@ const DashboardPage: React.FC = () => {
       </div>
 
       {/* Recent Logs Table */}
-      <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden shadow-sm">
-        <div className="px-6 py-4 border-b border-gray-700 flex items-center gap-2 bg-gray-800">
+      <div className="bg-zinc-900 rounded-xl border border-zinc-800 overflow-hidden shadow-sm">
+        <div className="px-6 py-4 border-b border-zinc-800 flex items-center gap-2 bg-zinc-900">
           <FileText className="h-4 w-4 text-green-400" />
           <h2 className="text-sm font-semibold text-gray-200 uppercase tracking-wider">Recent Log Entries</h2>
           {entries.length > 0 && (
@@ -682,7 +682,7 @@ const DashboardPage: React.FC = () => {
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead>
-              <tr className="bg-gray-900/50">
+              <tr className="bg-zinc-950/50">
                 <th className="text-left text-gray-500 font-medium py-3 px-5 text-xs uppercase tracking-wide w-44">Timestamp</th>
                 <th className="text-left text-gray-500 font-medium py-3 px-4 text-xs uppercase tracking-wide w-24">Level</th>
                 <th className="text-left text-gray-500 font-medium py-3 px-4 text-xs uppercase tracking-wide">Message</th>
@@ -691,7 +691,7 @@ const DashboardPage: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-gray-700/50">
               {entries.slice(0, 20).map((entry, idx) => (
-                <tr key={entry.id} className={`hover:bg-gray-700/40 transition-colors ${idx % 2 === 0 ? '' : 'bg-gray-900/20'}`}>
+                <tr key={entry.id} className={`hover:bg-zinc-800/40 transition-colors ${idx % 2 === 0 ? '' : 'bg-zinc-950/20'}`}>
                   <td className="py-3 px-5 text-gray-400 text-xs tabular-nums">
                     {entry.timestamp ? new Date(entry.timestamp).toLocaleString() : '-'}
                   </td>
@@ -730,7 +730,7 @@ const DashboardPage: React.FC = () => {
       {/* Analysis Results Popup */}
       {showAnalysisPopup && analysis && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg p-6 max-w-2xl w-full mx-4 border border-purple-700 max-h-[90vh] overflow-y-auto">
+          <div className="bg-zinc-900 rounded-lg p-6 max-w-2xl w-full mx-4 border border-purple-700 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-2xl font-bold text-white flex items-center">
                 <Brain className="h-6 w-6 mr-2 text-purple-400" />
@@ -764,7 +764,7 @@ const DashboardPage: React.FC = () => {
             {analysis.health_assessment && (
               <div className="mb-4">
                 <h3 className="font-semibold text-white mb-2">Health Assessment</h3>
-                <p className="text-gray-300 bg-gray-700 rounded p-3">{analysis.health_assessment}</p>
+                <p className="text-gray-300 bg-zinc-800 rounded p-3">{analysis.health_assessment}</p>
               </div>
             )}
 
@@ -772,7 +772,7 @@ const DashboardPage: React.FC = () => {
             {analysis.anomalies && analysis.anomalies.length > 0 && (
               <div className="mb-4">
                 <h3 className="font-semibold text-white mb-2">Anomalies Detected</h3>
-                <ul className="list-disc list-inside space-y-1 text-gray-300 bg-gray-700 rounded p-3">
+                <ul className="list-disc list-inside space-y-1 text-gray-300 bg-zinc-800 rounded p-3">
                   {analysis.anomalies.map((anomaly: string, idx: number) => (
                     <li key={idx}>{anomaly}</li>
                   ))}
@@ -784,7 +784,7 @@ const DashboardPage: React.FC = () => {
             {analysis.config_issues && analysis.config_issues.length > 0 && (
               <div className="mb-4">
                 <h3 className="font-semibold text-white mb-2">Configuration Issues</h3>
-                <ul className="list-disc list-inside space-y-1 text-gray-300 bg-gray-700 rounded p-3">
+                <ul className="list-disc list-inside space-y-1 text-gray-300 bg-zinc-800 rounded p-3">
                   {analysis.config_issues.map((issue: string, idx: number) => (
                     <li key={idx}>{issue}</li>
                   ))}
@@ -796,7 +796,7 @@ const DashboardPage: React.FC = () => {
             {analysis.performance_insights && analysis.performance_insights.length > 0 && (
               <div className="mb-4">
                 <h3 className="font-semibold text-white mb-2">Performance Insights</h3>
-                <ul className="list-disc list-inside space-y-1 text-gray-300 bg-gray-700 rounded p-3">
+                <ul className="list-disc list-inside space-y-1 text-gray-300 bg-zinc-800 rounded p-3">
                   {analysis.performance_insights.map((insight: string, idx: number) => (
                     <li key={idx}>{insight}</li>
                   ))}
@@ -808,7 +808,7 @@ const DashboardPage: React.FC = () => {
             {analysis.root_causes && analysis.root_causes.length > 0 && (
               <div className="mb-4">
                 <h3 className="font-semibold text-white mb-2">Potential Root Causes</h3>
-                <ul className="list-disc list-inside space-y-1 text-gray-300 bg-gray-700 rounded p-3">
+                <ul className="list-disc list-inside space-y-1 text-gray-300 bg-zinc-800 rounded p-3">
                   {analysis.root_causes.map((cause: string, idx: number) => (
                     <li key={idx}>{cause}</li>
                   ))}
@@ -820,7 +820,7 @@ const DashboardPage: React.FC = () => {
             {analysis.resolutions && analysis.resolutions.length > 0 && (
               <div>
                 <h3 className="font-semibold text-white mb-2">Suggested Resolutions</h3>
-                <ul className="list-disc list-inside space-y-1 text-gray-300 bg-gray-700 rounded p-3">
+                <ul className="list-disc list-inside space-y-1 text-gray-300 bg-zinc-800 rounded p-3">
                   {analysis.resolutions.map((resolution: string, idx: number) => (
                     <li key={idx}>{resolution}</li>
                   ))}

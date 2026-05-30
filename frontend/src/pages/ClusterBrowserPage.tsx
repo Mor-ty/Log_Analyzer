@@ -208,7 +208,7 @@ const ClusterBrowserPage: React.FC = () => {
       case 'CrashLoopBackOff':
         return 'text-red-400 bg-red-900/30';
       default:
-        return 'text-gray-400 bg-gray-900/30';
+        return 'text-gray-400 bg-zinc-950/30';
     }
   };
 
@@ -243,27 +243,35 @@ const ClusterBrowserPage: React.FC = () => {
         </div>
       )}
 
+      {/* Analyze Status */}
+      {analyzeStatus && (
+        <div className="bg-blue-900/50 border border-blue-700 rounded-lg p-4 flex items-start">
+          <Loader2 className="animate-spin h-5 w-5 text-blue-400 mr-3 mt-0.5" />
+          <p className="text-blue-300">{analyzeStatus}</p>
+        </div>
+      )}
+
       {/* Cluster Health */}
       {health && (
-        <div className="bg-gray-800 rounded-lg p-4">
+        <div className="bg-zinc-900 rounded-lg p-4">
           <h2 className="text-lg font-semibold text-white mb-3 flex items-center">
             <Activity className="h-5 w-5 mr-2 text-blue-400" />
             Cluster Health
           </h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-gray-700 rounded p-3">
+            <div className="bg-zinc-800 rounded p-3">
               <p className="text-gray-400 text-sm">Namespaces</p>
               <p className="text-2xl font-bold text-white">{health.namespaces}</p>
             </div>
-            <div className="bg-gray-700 rounded p-3">
+            <div className="bg-zinc-800 rounded p-3">
               <p className="text-gray-400 text-sm">Total Pods</p>
               <p className="text-2xl font-bold text-white">{health.total_pods}</p>
             </div>
-            <div className="bg-gray-700 rounded p-3">
+            <div className="bg-zinc-800 rounded p-3">
               <p className="text-gray-400 text-sm">Running</p>
               <p className="text-2xl font-bold text-green-400">{health.running_pods}</p>
             </div>
-            <div className="bg-gray-700 rounded p-3">
+            <div className="bg-zinc-800 rounded p-3">
               <p className="text-gray-400 text-sm">Failed</p>
               <p className="text-2xl font-bold text-red-400">{health.failed_pods}</p>
             </div>
@@ -272,12 +280,12 @@ const ClusterBrowserPage: React.FC = () => {
       )}
 
       {/* Namespace Selector */}
-      <div className="bg-gray-800 rounded-lg p-4">
+      <div className="bg-zinc-900 rounded-lg p-4">
         <label className="block text-sm font-medium text-gray-300 mb-2">Select Namespace</label>
         <select
           value={selectedNamespace}
           onChange={(e) => setSelectedNamespace(e.target.value)}
-          className="w-full bg-gray-700 text-white rounded-md px-3 py-2 border border-gray-600 focus:outline-none focus:border-blue-500"
+          className="w-full bg-zinc-800 text-white rounded-md px-3 py-2 border border-zinc-700 focus:outline-none focus:border-blue-500"
         >
           {namespaces.map((ns) => (
             <option key={ns} value={ns}>
@@ -288,7 +296,7 @@ const ClusterBrowserPage: React.FC = () => {
       </div>
 
       {/* Pods List */}
-      <div className="bg-gray-800 rounded-lg p-4">
+      <div className="bg-zinc-900 rounded-lg p-4">
         <h2 className="text-lg font-semibold text-white mb-3 flex items-center">
           <Server className="h-5 w-5 mr-2 text-blue-400" />
           Pods in {selectedNamespace}
@@ -298,9 +306,9 @@ const ClusterBrowserPage: React.FC = () => {
         ) : (
           <div className="space-y-2">
             {pods.map((pod) => (
-              <div key={pod.name} className="border border-gray-700 rounded-lg overflow-hidden">
+              <div key={pod.name} className="border border-zinc-800 rounded-lg overflow-hidden">
                 <div
-                  className="p-3 bg-gray-700 hover:bg-gray-600 cursor-pointer flex items-center justify-between"
+                  className="p-3 bg-zinc-800 hover:bg-zinc-700 cursor-pointer flex items-center justify-between"
                   onClick={() => togglePodExpand(pod.name)}
                 >
                   <div className="flex items-center space-x-3">
@@ -316,19 +324,19 @@ const ClusterBrowserPage: React.FC = () => {
                   </div>
                 </div>
                 {expandedPods.has(pod.name) && (
-                  <div className="p-3 bg-gray-800 space-y-2">
+                  <div className="p-3 bg-zinc-900 space-y-2">
                     <div className="flex space-x-2">
                       <button
                         onClick={() => loadPodLogs(pod)}
                         disabled={loadingLogs}
-                        className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white text-sm px-3 py-1 rounded"
+                        className="bg-blue-600 hover:bg-blue-700 disabled:bg-zinc-700 text-white text-sm px-3 py-1 rounded"
                       >
                         {loadingLogs && selectedPod?.name === pod.name ? 'Loading...' : 'View Logs'}
                       </button>
                       <button
                         onClick={() => analyzeLogs(pod)}
                         disabled={isAnalyzing}
-                        className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white text-sm px-3 py-1 rounded"
+                        className="bg-green-600 hover:bg-green-700 disabled:bg-zinc-700 text-white text-sm px-3 py-1 rounded"
                       >
                         {isAnalyzing && (clusterJob?.metadata as any)?.pod?.name === pod.name
                           ? `Analyzing… (${clusterJob!.elapsedSeconds}s)`
@@ -349,9 +357,9 @@ const ClusterBrowserPage: React.FC = () => {
 
       {/* Logs Display */}
       {selectedPod && logs.length > 0 && (
-        <div className="bg-gray-800 rounded-lg p-4">
+        <div className="bg-zinc-900 rounded-lg p-4">
           <h2 className="text-lg font-semibold text-white mb-3">Logs from {selectedPod.name}</h2>
-          <div className="bg-gray-900 rounded p-4 max-h-96 overflow-y-auto font-mono text-sm">
+          <div className="bg-zinc-950 rounded p-4 max-h-96 overflow-y-auto font-mono text-sm">
             {logs.map((log, idx) => (
               <div key={idx} className="mb-1">
                 <span className="text-gray-500">{log.timestamp || '-'}</span>
@@ -371,7 +379,7 @@ const ClusterBrowserPage: React.FC = () => {
 
       {/* Analysis Results */}
       {analysis && (
-        <div className="bg-gray-800 rounded-lg p-6 space-y-4">
+        <div className="bg-zinc-900 rounded-lg p-6 space-y-4">
           <h2 className="text-xl font-bold text-white">Analysis Results</h2>
           <div className={`p-4 rounded-lg ${
             analysis.severity === 'Critical' ? 'bg-red-900/50 border border-red-700' :
